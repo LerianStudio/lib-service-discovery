@@ -133,6 +133,10 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 		svc.Port = m.config.AdvertisePort
 	}
 
+	if svc.Scheme == "" && m.config.AdvertiseScheme != "" {
+		svc.Scheme = m.config.AdvertiseScheme
+	}
+
 	if m.workload != "" {
 		svc.Tags = append(svc.Tags, "workload="+m.workload)
 	}

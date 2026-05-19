@@ -1,6 +1,7 @@
 package libsd
 
 import (
+	"net/url"
 	"os"
 	"strconv"
 
@@ -19,9 +20,16 @@ type Config struct {
 	ConsulAddr string
 
 	// AdvertiseAddr is the address this service advertises to Consul.
-	// Required when Enabled is true. Typically the pod/container hostname or
-	// the Ingress DNS name in Kubernetes.
+	// Required when Enabled is true. Accepts either a plain hostname
+	// ("fees.dev.example.net") or a full URL ("https://fees.dev.example.net").
+	// When a full URL is provided, the scheme is extracted into AdvertiseScheme
+	// automatically by ConfigFromEnv and withDefaults.
 	AdvertiseAddr string
+
+	// AdvertiseScheme is the URL scheme ("https", "http") stored in Consul
+	// Meta["scheme"] when this service registers. Set automatically when
+	// AdvertiseAddr contains a scheme prefix.
+	AdvertiseScheme string
 
 	// AdvertisePort overrides the port reported to Consul.
 	// When zero the port passed to Register is used as-is.
@@ -42,17 +50,21 @@ type Config struct {
 //
 //	SERVICE_DISCOVERY_ENABLED — "true" to enable (default: disabled)
 //	CONSUL_ADDR               — Consul agent address (default: "localhost:8500")
-//	SERVICE_ADVERTISE_ADDR    — address this instance advertises
+//	SERVICE_ADVERTISE_ADDR    — hostname or full URL ("https://fees.example.net") this instance advertises
 //	SERVICE_ADVERTISE_PORT    — port override (default: 0 = use Register port)
 //	WORKLOAD_ID               — workload scope for tag-based filtering (default: empty = no filter)
 func ConfigFromEnv() Config {
-	return Config{
+	c := Config{
 		Enabled:       os.Getenv("SERVICE_DISCOVERY_ENABLED") == "true",
 		ConsulAddr:    envOrDefault("CONSUL_ADDR", "localhost:8500"),
 		AdvertiseAddr: os.Getenv("SERVICE_ADVERTISE_ADDR"),
 		AdvertisePort: envIntOrDefault("SERVICE_ADVERTISE_PORT", 0),
 		Workload:      os.Getenv("WORKLOAD_ID"),
 	}
+
+	c = c.parseAdvertiseAddr()
+
+	return c
 }
 
 // Validate returns an error when the Config is inconsistent.
@@ -81,6 +93,27 @@ func (c Config) withDefaults() Config {
 	if c.ConsulAddr == "" {
 		c.ConsulAddr = "localhost:8500"
 	}
+
+	return c.parseAdvertiseAddr()
+}
+
+// parseAdvertiseAddr extracts the scheme from AdvertiseAddr when it contains "://"
+// so callers can use "https://fees.example.net" or plain "fees.example.net".
+func (c Config) parseAdvertiseAddr() Config {
+	if c.AdvertiseAddr == "" {
+		return c
+	}
+
+	u, err := url.Parse(c.AdvertiseAddr)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return c
+	}
+
+	if c.AdvertiseScheme == "" {
+		c.AdvertiseScheme = u.Scheme
+	}
+
+	c.AdvertiseAddr = u.Hostname()
 
 	return c
 }
