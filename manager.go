@@ -175,6 +175,11 @@ func (m *Manager) Resolve(ctx context.Context, name, fallback string) (string, e
 
 	svc, err := m.registry.Resolve(ctx, name, tag)
 	if err == nil {
+		m.logger.Log(ctx, log.LevelDebug, "consul resolved",
+			log.String("service", name),
+			log.String("addr", svc.Addr()),
+			log.String("workload", m.workload))
+
 		return svc.Addr(), nil
 	}
 
