@@ -34,13 +34,22 @@ func (r *consulRegistry) Register(ctx context.Context, svc Service) error {
 		return ErrNilRegistry
 	}
 
+	meta := svc.Meta
+	if svc.Scheme != "" {
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+
+		meta["scheme"] = svc.Scheme
+	}
+
 	reg := &api.AgentServiceRegistration{
 		ID:      svc.ID,
 		Name:    svc.Name,
 		Address: svc.Address,
 		Port:    svc.Port,
 		Tags:    svc.Tags,
-		Meta:    svc.Meta,
+		Meta:    meta,
 	}
 
 	if svc.HealthCheck != nil {
@@ -99,6 +108,7 @@ func (r *consulRegistry) Resolve(ctx context.Context, name, tag string) (Service
 		Name:    e.Service.Service,
 		Address: e.Service.Address,
 		Port:    e.Service.Port,
+		Scheme:  e.Service.Meta["scheme"],
 		Tags:    e.Service.Tags,
 		Meta:    e.Service.Meta,
 	}, nil

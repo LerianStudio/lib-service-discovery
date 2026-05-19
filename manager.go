@@ -195,6 +195,55 @@ func (m *Manager) Resolve(ctx context.Context, name, fallback string) (string, e
 	return "", err
 }
 
+// ResolveService is like Resolve but returns the full Service struct, giving
+// callers access to Scheme and other fields beyond host:port.
+// fallback is returned as-is when discovery is disabled or Consul fails;
+// an empty fallback.Address is treated as "no fallback".
+func (m *Manager) ResolveService(ctx context.Context, name string, fallback Service) (Service, error) {
+	if m == nil {
+		return Service{}, ErrNilManager
+	}
+
+	if !m.config.Enabled {
+		if fallback.Address == "" {
+			return Service{}, fmt.Errorf("%w: %q", ErrDiscoveryDisabledNoFallback, name)
+		}
+
+		m.logger.Log(ctx, log.LevelDebug, "discovery disabled — using fallback",
+			log.String("service", name),
+			log.String("fallback", fallback.Addr()))
+
+		return fallback, nil
+	}
+
+	tag := ""
+	if m.workload != "" {
+		tag = "workload=" + m.workload
+	}
+
+	svc, err := m.registry.Resolve(ctx, name, tag)
+	if err == nil {
+		m.logger.Log(ctx, log.LevelDebug, "consul resolved",
+			log.String("service", name),
+			log.String("addr", svc.Addr()),
+			log.String("scheme", svc.Scheme),
+			log.String("workload", m.workload))
+
+		return svc, nil
+	}
+
+	if fallback.Address != "" {
+		m.logger.Log(ctx, log.LevelWarn, "consul resolve failed — using fallback",
+			log.String("service", name),
+			log.String("fallback", fallback.Addr()),
+			log.Err(err))
+
+		return fallback, nil
+	}
+
+	return Service{}, err
+}
+
 // Deregister removes serviceID from the registry.
 // No-op when discovery is disabled.
 func (m *Manager) Deregister(ctx context.Context, serviceID string) error {

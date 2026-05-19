@@ -53,6 +53,10 @@ type Service struct {
 	Name        string
 	Address     string
 	Port        int
+	// Scheme is the URL scheme used to reach this service (e.g. "https", "http").
+	// Stored in Consul Meta under the key "scheme". When empty, callers should
+	// default to their own scheme convention.
+	Scheme      string
 	Tags        []string
 	Meta        map[string]string
 	HealthCheck *HealthCheck
