@@ -1,6 +1,6 @@
 module golang-plugin-boilerplate
 
-go 1.23.2
+go 1.25.0
 
 require (
 	github.com/LerianStudio/lib-commons v1.10.0
@@ -10,11 +10,11 @@ require (
 	github.com/go-playground/validator v9.31.0+incompatible
 	github.com/gofiber/fiber/v2 v2.52.6
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.7.5
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/fiber-swagger v1.3.0
 	github.com/swaggo/swag v1.16.4
 	go.mongodb.org/mongo-driver v1.17.3
@@ -82,12 +82,11 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.38.0 // indirect
-	golang.org/x/net v0.40.0 // indirect
-	golang.org/x/sync v0.14.0 // indirect
-	golang.org/x/sys v0.33.0 // indirect
-	golang.org/x/text v0.25.0 // indirect
-	golang.org/x/tools v0.33.0 // indirect
+	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/tools v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250512202823-5a2f75b736a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250512202823-5a2f75b736a9 // indirect
 	gopkg.in/go-playground/assert.v1 v1.2.1 // indirect
