@@ -1,10 +1,10 @@
 # AGENTS
 
-This file provides repository-specific guidance for coding agents working on `lib-sd`.
+This file provides repository-specific guidance for coding agents working on `lib-service-discovery`.
 
 ## Project snapshot
 
-- Module: `github.com/LerianStudio/lib-sd`
+- Module: `github.com/LerianStudio/lib-service-discovery`
 - Language: Go
 - Go version: `1.26` (see `go.mod`)
 - Library dependency: `github.com/LerianStudio/lib-commons/v5` (local replace directive)
@@ -18,8 +18,8 @@ This file provides repository-specific guidance for coding agents working on `li
 ## Repository shape
 
 ```
-lib-sd/
-├── lib-sd/          # Service discovery library (main deliverable)
+lib-service-discovery/
+├── lib-service-discovery/          # Service discovery library (main deliverable)
 │   ├── doc.go       # Package-level godoc
 │   ├── types.go     # Errors + Registry interface + domain types (Service, HealthCheck, Event)
 │   ├── config.go    # Config struct, ConfigFromEnv(), Validate(), withDefaults()

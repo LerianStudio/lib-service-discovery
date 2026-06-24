@@ -5,7 +5,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/LerianStudio/lib-commons/v5/commons/log"
+	"github.com/LerianStudio/lib-observability/log"
 )
 
 // Config holds the configuration for the Manager.

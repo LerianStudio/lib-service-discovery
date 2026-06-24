@@ -10,25 +10,25 @@ import (
 
 var (
 	// ErrNilManager is returned when a method is called on a nil *Manager.
-	ErrNilManager = errors.New("lib-sd: manager is nil")
+	ErrNilManager = errors.New("lib-service-discovery: manager is nil")
 
 	// ErrNilRegistry is returned when a method is called on a nil registry.
-	ErrNilRegistry = errors.New("lib-sd: registry is nil")
+	ErrNilRegistry = errors.New("lib-service-discovery: registry is nil")
 
 	// ErrEmptyAdvertiseAddr is returned when SERVICE_DISCOVERY_ENABLED=true but
 	// SERVICE_ADVERTISE_ADDR is not set.
-	ErrEmptyAdvertiseAddr = errors.New("lib-sd: SERVICE_ADVERTISE_ADDR is required when discovery is enabled")
+	ErrEmptyAdvertiseAddr = errors.New("lib-service-discovery: SERVICE_ADVERTISE_ADDR is required when discovery is enabled")
 
 	// ErrEmptyConsulAddr is returned when the Consul address is empty.
-	ErrEmptyConsulAddr = errors.New("lib-sd: consul address must not be empty")
+	ErrEmptyConsulAddr = errors.New("lib-service-discovery: consul address must not be empty")
 
 	// ErrNoHealthyInstances is returned by Resolve when Consul finds no healthy
 	// instances for the requested service name.
-	ErrNoHealthyInstances = errors.New("lib-sd: no healthy instances found")
+	ErrNoHealthyInstances = errors.New("lib-service-discovery: no healthy instances found")
 
 	// ErrDiscoveryDisabledNoFallback is returned by Resolve when discovery is
 	// disabled and no fallback address was provided.
-	ErrDiscoveryDisabledNoFallback = errors.New("lib-sd: discovery disabled and no fallback address provided")
+	ErrDiscoveryDisabledNoFallback = errors.New("lib-service-discovery: discovery disabled and no fallback address provided")
 )
 
 // ── Registry interface ────────────────────────────────────────────────────────
@@ -62,13 +62,32 @@ type Service struct {
 	HealthCheck *HealthCheck
 }
 
-// HealthCheck configures the HTTP health endpoint Consul polls.
+// HealthCheck configures how Consul tracks the liveness of the service.
+//
+// Two mutually exclusive modes:
+//   - HTTP check (Interval/Timeout): Consul polls an HTTP endpoint on the
+//     service. Requires Consul to REACH the service — only works when they share
+//     a network (e.g. client agent on the same node).
+//   - TTL check (TTL): the registry pushes a heartbeat ("pass") every TTL/2 from
+//     inside the process, so Consul never needs to reach the service. Required for
+//     agentless/remote workloads behind NAT (the central-Consul model).
 type HealthCheck struct {
-	// HTTP is set automatically by Manager.Register from the service address and port.
-	// Set it manually only when using the Registry interface directly.
+	// HTTP is set automatically by Manager.Register from the service scheme,
+	// address, port and Path. Set it manually only when using the Registry
+	// interface directly.
 	HTTP     string
 	Interval string
 	Timeout  string
+
+	// Path is the HTTP path Consul probes for the health check (e.g. "/healthz").
+	// Defaults to "/health" when empty. A leading slash is added if missing.
+	// Ignored for TTL checks.
+	Path string
+
+	// TTL, when non-empty (e.g. "30s"), registers a TTL check instead of HTTP.
+	// The registry emits a heartbeat every TTL/2 and stops it on Deregister.
+	// Mutually exclusive with HTTP; when set, HTTP is ignored.
+	TTL string
 }
 
 // EventType classifies a Watch event.

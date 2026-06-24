@@ -3,11 +3,12 @@ package libsd
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	"github.com/LerianStudio/lib-commons/v5/commons/log"
+	"github.com/LerianStudio/lib-observability/log"
 )
 
-// Manager is the entry point for lib-sd.
+// Manager is the entry point for lib-service-discovery.
 //
 // When SERVICE_DISCOVERY_ENABLED=false, Register and Deregister are no-ops,
 // and Resolve returns the fallback address directly.
@@ -98,7 +99,7 @@ func New(cfg Config, opts ...Option) (*Manager, error) {
 	if m.registry == nil {
 		registry, err := newConsulRegistry(cfg.ConsulAddr, m.logger)
 		if err != nil {
-			return nil, fmt.Errorf("lib-sd: %w", err)
+			return nil, fmt.Errorf("lib-service-discovery: %w", err)
 		}
 
 		m.registry = registry
@@ -138,14 +139,40 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 	}
 
 	if m.workload != "" {
-		svc.Tags = append(svc.Tags, "workload="+m.workload)
+		// Copy before appending so we never mutate the caller's backing array.
+		tags := make([]string, len(svc.Tags), len(svc.Tags)+1)
+		copy(tags, svc.Tags)
+		svc.Tags = append(tags, "workload="+m.workload)
 	}
 
-	if svc.HealthCheck != nil {
-		svc.HealthCheck.HTTP = fmt.Sprintf("http://%s:%d/health", svc.Address, svc.Port)
+	// TTL checks need no reachable endpoint; only build the HTTP URL for HTTP checks.
+	if svc.HealthCheck != nil && svc.HealthCheck.TTL == "" {
+		// Copy the HealthCheck before mutating: svc is a value, but HealthCheck is
+		// a pointer shared with the caller, so writing HTTP in place would leak back.
+		hc := *svc.HealthCheck
+		hc.HTTP = healthCheckURL(svc.Scheme, svc.Address, svc.Port, hc.Path)
+		svc.HealthCheck = &hc
 	}
 
 	return m.registry.Register(ctx, svc)
+}
+
+// healthCheckURL builds the URL Consul probes for an HTTP health check, honoring
+// the service scheme (defaulting to "http") and path (defaulting to "/health").
+func healthCheckURL(scheme, addr string, port int, path string) string {
+	if scheme == "" {
+		scheme = "http"
+	}
+
+	if path == "" {
+		path = "/health"
+	}
+
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	return fmt.Sprintf("%s://%s:%d%s", scheme, addr, port, path)
 }
 
 // Resolve returns the host:port address of name.

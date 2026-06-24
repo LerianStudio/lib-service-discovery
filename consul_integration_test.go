@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LerianStudio/lib-commons/v5/commons/log"
+	"github.com/LerianStudio/lib-observability/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -174,4 +174,100 @@ func TestIntegration_Watch(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Log("no event received within 10s — Consul index may not have changed")
 	}
+}
+
+// TestIntegration_WatchCancelClosesChannel verifies #1: cancelling ctx aborts the
+// in-flight long-poll (via QueryOptions.WithContext) so the channel closes promptly
+// instead of blocking until WaitTime.
+func TestIntegration_WatchCancelClosesChannel(t *testing.T) {
+	port := startHealthServer(t)
+	m := integrationManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	svc := Service{
+		ID:          fmt.Sprintf("test-svc-wc-%d", port),
+		Name:        fmt.Sprintf("test-svc-wc-%d", port),
+		Port:        port,
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"},
+	}
+
+	require.NoError(t, m.Register(ctx, svc))
+	t.Cleanup(func() { _ = m.Deregister(context.Background(), svc.ID) })
+
+	waitHealthy(t, m, svc.Name, 10*time.Second)
+
+	ch, err := m.Watch(ctx, svc.Name)
+	require.NoError(t, err)
+
+	// Drain the initial event (if any) so the goroutine parks in the blocking poll.
+	select {
+	case <-ch:
+	case <-time.After(3 * time.Second):
+	}
+
+	cancel()
+
+	// Drain remaining buffered events, then assert the channel closes promptly.
+	deadline := time.After(3 * time.Second)
+
+	for {
+		select {
+		case _, open := <-ch:
+			if !open {
+				return // closed — success
+			}
+		case <-deadline:
+			t.Fatal("watch channel did not close within 3s of ctx cancel")
+		}
+	}
+}
+
+// TestIntegration_ResolveContextCancelled verifies #1: a cancelled ctx makes the
+// Consul query fail fast rather than hanging.
+func TestIntegration_ResolveContextCancelled(t *testing.T) {
+	m := integrationManager(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := m.Resolve(ctx, "any-svc", "")
+	require.Error(t, err)
+}
+
+// TestIntegration_ResolveRoundRobin verifies #4: with multiple healthy instances,
+// Resolve spreads requests across them instead of always returning the first.
+func TestIntegration_ResolveRoundRobin(t *testing.T) {
+	p1 := startHealthServer(t)
+	p2 := startHealthServer(t)
+	m := integrationManager(t)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("test-svc-rr-%d", p1)
+
+	for _, p := range []int{p1, p2} {
+		id := fmt.Sprintf("%s-%d", name, p)
+		svc := Service{
+			ID:          id,
+			Name:        name,
+			Port:        p,
+			HealthCheck: &HealthCheck{Interval: "1s", Timeout: "1s"},
+		}
+		require.NoError(t, m.Register(ctx, svc))
+
+		t.Cleanup(func() { _ = m.Deregister(context.Background(), id) })
+	}
+
+	// Once both instances are healthy, round-robin must surface both ports.
+	seen := map[string]bool{}
+
+	require.Eventually(t, func() bool {
+		addr, err := m.Resolve(ctx, name, "")
+		if err == nil {
+			seen[addr] = true
+		}
+
+		return len(seen) >= 2
+	}, 20*time.Second, 200*time.Millisecond, "expected Resolve to return both instances")
+
+	assert.Len(t, seen, 2)
 }

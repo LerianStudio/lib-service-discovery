@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LerianStudio/lib-commons/v5/commons/log"
+	"github.com/LerianStudio/lib-observability/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -357,4 +357,117 @@ func TestWorkload_WithWorkloadClearsWhenEmpty(t *testing.T) {
 	m, err := New(Config{Enabled: false, Workload: "tenant-a"}, WithWorkload(""))
 	require.NoError(t, err)
 	assert.Equal(t, "", m.workload)
+}
+
+// ── Health check URL (#2: honor scheme + configurable path) ─────────────────────
+
+// registerCapture registers svc on a captureRegistry manager and returns the
+// Service the registry actually received.
+func registerCapture(t *testing.T, m *Manager, svc Service) Service {
+	t.Helper()
+
+	var got Service
+
+	m.registry = &captureRegistry{onRegister: func(s Service) { got = s }}
+	require.NoError(t, m.Register(context.Background(), svc))
+
+	return got
+}
+
+func TestRegister_HealthCheckURLDefaultSchemeAndPath(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081,
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"}})
+
+	assert.Equal(t, "http://10.0.0.2:8081/health", got.HealthCheck.HTTP)
+}
+
+func TestRegister_HealthCheckURLHonorsHTTPSScheme(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+	m.config.AdvertiseScheme = "https"
+
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081,
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"}})
+
+	assert.Equal(t, "https://10.0.0.2:8081/health", got.HealthCheck.HTTP)
+}
+
+func TestRegister_HealthCheckURLCustomPath(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081,
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s", Path: "/healthz"}})
+
+	assert.Equal(t, "http://10.0.0.2:8081/healthz", got.HealthCheck.HTTP)
+}
+
+func TestRegister_HealthCheckURLAddsLeadingSlashToPath(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081,
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s", Path: "ping"}})
+
+	assert.Equal(t, "http://10.0.0.2:8081/ping", got.HealthCheck.HTTP)
+}
+
+func TestRegister_TTLCheckSkipsHTTPURL(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081,
+		HealthCheck: &HealthCheck{TTL: "30s"}})
+
+	assert.Equal(t, "", got.HealthCheck.HTTP, "TTL checks need no HTTP endpoint")
+}
+
+// ── Caller aliasing (#5: Register must not mutate the caller's inputs) ───────────
+
+func TestRegister_DoesNotMutateCallerHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+
+	hc := &HealthCheck{Interval: "2s", Timeout: "1s"}
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081, HealthCheck: hc})
+
+	require.Equal(t, "http://10.0.0.2:8081/health", got.HealthCheck.HTTP)
+	assert.Equal(t, "", hc.HTTP, "caller's HealthCheck pointer must not be mutated")
+}
+
+func TestRegister_DoesNotMutateCallerTags(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+	m.workload = "tenant-a"
+
+	// A slice with spare capacity is where an in-place append would leak.
+	orig := make([]string, 1, 4)
+	orig[0] = "region=us"
+
+	got := registerCapture(t, m, Service{Name: "svc-a", Port: 8081, Tags: orig})
+
+	assert.Contains(t, got.Tags, "workload=tenant-a")
+	assert.Equal(t, []string{"region=us"}, orig, "caller's Tags slice must be unchanged")
+
+	// The workload tag must not have leaked into the caller's backing array.
+	for _, tag := range orig[:cap(orig)] {
+		assert.NotContains(t, tag, "workload=")
+	}
 }

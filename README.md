@@ -1,6 +1,6 @@
-# lib-sd
+# lib-service-discovery
 
-Service discovery library (`lib-sd`) backed by HashiCorp Consul, following Lerian's `lib-commons` conventions.
+Service discovery library (`lib-service-discovery`) backed by HashiCorp Consul, following Lerian's `lib-commons` conventions.
 
 ## Requirements
 
@@ -10,12 +10,12 @@ Service discovery library (`lib-sd`) backed by HashiCorp Consul, following Leria
 ## Installation
 
 ```bash
-go get github.com/LerianStudio/lib-sd
+go get github.com/LerianStudio/lib-service-discovery
 ```
 
 ## What is in this library
 
-### `lib-sd`
+### `lib-service-discovery`
 
 A service discovery abstraction with three operational modes:
 
