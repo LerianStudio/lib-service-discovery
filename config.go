@@ -41,6 +41,16 @@ type Config struct {
 	// Leave empty to disable workload filtering (all healthy instances are candidates).
 	Workload string
 
+	// TLS enables HTTPS to the discovery server. Maps to SD_TLS.
+	TLS bool
+
+	// TLSSkipVerify disables server certificate verification (dev/self-signed).
+	// Maps to SD_TLS_SKIP_VERIFY.
+	TLSSkipVerify bool
+
+	// Token is the ACL token sent to the discovery server. Maps to SD_TOKEN.
+	Token string
+
 	// Logger receives structured log output from the Manager and registry.
 	// Defaults to log.NewNop() when nil.
 	Logger log.Logger
@@ -48,18 +58,26 @@ type Config struct {
 
 // ConfigFromEnv returns a Config populated from environment variables.
 //
-//	SERVICE_DISCOVERY_ENABLED — "true" to enable (default: disabled)
-//	CONSUL_ADDR               — Consul agent address (default: "localhost:8500")
-//	SERVICE_ADVERTISE_ADDR    — hostname or full URL ("https://fees.example.net") this instance advertises
-//	SERVICE_ADVERTISE_PORT    — port override (default: 0 = use Register port)
-//	WORKLOAD_ID               — workload scope for tag-based filtering (default: empty = no filter)
+// Canonical, backend-agnostic SD_* names (legacy names accepted as fallback):
+//
+//	SD_ENABLED          — "true" to enable               (legacy: SERVICE_DISCOVERY_ENABLED)
+//	SD_ADDRESS          — discovery server addr host:port (legacy: CONSUL_ADDR; default "localhost:8500")
+//	SD_ADVERTISE_ADDRESS— hostname or full URL this instance advertises (legacy: SERVICE_ADVERTISE_ADDR)
+//	SD_ADVERTISE_PORT   — port override, 0 = use Register port (legacy: SERVICE_ADVERTISE_PORT)
+//	SD_WORKLOAD         — workload scope for tag filtering (legacy: WORKLOAD_ID)
+//	SD_TLS              — "true" for HTTPS to the server
+//	SD_TLS_SKIP_VERIFY  — "true" to skip server cert verification
+//	SD_TOKEN            — ACL token
 func ConfigFromEnv() Config {
 	c := Config{
-		Enabled:       os.Getenv("SERVICE_DISCOVERY_ENABLED") == "true",
-		ConsulAddr:    envOrDefault("CONSUL_ADDR", "localhost:8500"),
-		AdvertiseAddr: os.Getenv("SERVICE_ADVERTISE_ADDR"),
-		AdvertisePort: envIntOrDefault("SERVICE_ADVERTISE_PORT", 0),
-		Workload:      os.Getenv("WORKLOAD_ID"),
+		Enabled:       anyEnvTrue("SD_ENABLED", "SERVICE_DISCOVERY_ENABLED"),
+		ConsulAddr:    firstEnv("localhost:8500", "SD_ADDRESS", "CONSUL_ADDR"),
+		AdvertiseAddr: firstEnv("", "SD_ADVERTISE_ADDRESS", "SERVICE_ADVERTISE_ADDR"),
+		AdvertisePort: firstEnvInt(0, "SD_ADVERTISE_PORT", "SERVICE_ADVERTISE_PORT"),
+		Workload:      firstEnv("", "SD_WORKLOAD", "WORKLOAD_ID"),
+		TLS:           os.Getenv("SD_TLS") == "true",
+		TLSSkipVerify: os.Getenv("SD_TLS_SKIP_VERIFY") == "true",
+		Token:         os.Getenv("SD_TOKEN"),
 	}
 
 	c = c.parseAdvertiseAddr()
@@ -118,20 +136,38 @@ func (c Config) parseAdvertiseAddr() Config {
 	return c
 }
 
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+// firstEnv returns the first non-empty value among keys (precedence order),
+// or fallback when none is set. Used to prefer SD_* over legacy names.
+func firstEnv(fallback string, keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
 	}
 
 	return fallback
 }
 
-func envIntOrDefault(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
+// firstEnvInt is firstEnv parsed as an int.
+func firstEnvInt(fallback int, keys ...string) int {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
 		}
 	}
 
 	return fallback
+}
+
+// anyEnvTrue reports whether any of keys is set to the string "true".
+func anyEnvTrue(keys ...string) bool {
+	for _, k := range keys {
+		if os.Getenv(k) == "true" {
+			return true
+		}
+	}
+
+	return false
 }

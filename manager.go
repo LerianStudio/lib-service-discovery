@@ -97,7 +97,7 @@ func New(cfg Config, opts ...Option) (*Manager, error) {
 	}
 
 	if m.registry == nil {
-		registry, err := newConsulRegistry(cfg.ConsulAddr, m.logger)
+		registry, err := newConsulRegistry(cfg, m.logger)
 		if err != nil {
 			return nil, fmt.Errorf("lib-service-discovery: %w", err)
 		}

@@ -67,12 +67,19 @@ defer sd.Deregister(ctx, "svc-a-1")
 
 ## Environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `SERVICE_DISCOVERY_ENABLED` | `false` | Set to `"true"` to enable Consul-backed discovery |
-| `CONSUL_ADDR` | `localhost:8500` | Consul agent address |
-| `SERVICE_ADVERTISE_ADDR` | — | Address this service advertises (required when enabled) |
-| `SERVICE_ADVERTISE_PORT` | `0` | Port override (defaults to the port passed to `Register`) |
+Canonical names use the backend-agnostic `SD_` prefix. Legacy names are still
+accepted as a fallback (`SD_` takes precedence when both are set).
+
+| Variable | Legacy (fallback) | Default | Description |
+|---|---|---|---|
+| `SD_ENABLED` | `SERVICE_DISCOVERY_ENABLED` | `false` | Set to `"true"` to enable discovery |
+| `SD_ADDRESS` | `CONSUL_ADDR` | `localhost:8500` | Discovery server address (host:port) |
+| `SD_ADVERTISE_ADDRESS` | `SERVICE_ADVERTISE_ADDR` | — | Address this service advertises (hostname or full URL); required when enabled |
+| `SD_ADVERTISE_PORT` | `SERVICE_ADVERTISE_PORT` | `0` | Port override (defaults to the port passed to `Register`) |
+| `SD_WORKLOAD` | `WORKLOAD_ID` | — | Workload scope for tag-based isolation |
+| `SD_TLS` | — | `false` | `"true"` to use HTTPS to the server |
+| `SD_TLS_SKIP_VERIFY` | — | `false` | `"true"` to skip server certificate verification |
+| `SD_TOKEN` | — | — | ACL token sent to the server |
 
 ## Running the demo
 

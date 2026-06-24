@@ -41,13 +41,27 @@ type consulRegistry struct {
 	heartbeats map[string]context.CancelFunc
 }
 
-func newConsulRegistry(addr string, logger log.Logger) (Registry, error) {
+func newConsulRegistry(c Config, logger log.Logger) (Registry, error) {
 	if logger == nil {
 		logger = log.NewNop()
 	}
 
+	// DefaultConfig still honors the SDK's own CONSUL_HTTP_* env vars as a
+	// fallback; explicit SD_* values (TLS/Token) take precedence below.
 	cfg := api.DefaultConfig()
-	cfg.Address = addr
+	cfg.Address = c.ConsulAddr
+
+	if c.TLS {
+		cfg.Scheme = "https"
+	}
+
+	if c.TLSSkipVerify {
+		cfg.TLSConfig.InsecureSkipVerify = true
+	}
+
+	if c.Token != "" {
+		cfg.Token = c.Token
+	}
 
 	client, err := api.NewClient(cfg)
 	if err != nil {
