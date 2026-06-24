@@ -192,9 +192,11 @@ func (m *Manager) Resolve(ctx context.Context, name, fallback string) (string, e
 			return "", fmt.Errorf("%w: %q", ErrDiscoveryDisabledNoFallback, name)
 		}
 
-		m.logger.Log(ctx, log.LevelDebug, "discovery disabled — using fallback",
+		m.logger.Log(ctx, log.LevelInfo, "service resolved",
 			log.String("service", name),
-			log.String("fallback", fallback))
+			log.String("addr", fallback),
+			log.String("source", "fallback"),
+			log.String("reason", "discovery disabled"))
 
 		return fallback, nil
 	}
@@ -206,18 +208,21 @@ func (m *Manager) Resolve(ctx context.Context, name, fallback string) (string, e
 
 	svc, err := m.registry.Resolve(ctx, name, tag)
 	if err == nil {
-		m.logger.Log(ctx, log.LevelDebug, "consul resolved",
+		m.logger.Log(ctx, log.LevelInfo, "service resolved",
 			log.String("service", name),
 			log.String("addr", svc.Addr()),
+			log.String("source", "consul"),
 			log.String("workload", m.workload))
 
 		return svc.Addr(), nil
 	}
 
 	if fallback != "" {
-		m.logger.Log(ctx, log.LevelWarn, "consul resolve failed — using fallback",
+		m.logger.Log(ctx, log.LevelWarn, "service resolved",
 			log.String("service", name),
-			log.String("fallback", fallback),
+			log.String("addr", fallback),
+			log.String("source", "fallback"),
+			log.String("reason", "consul resolve failed"),
 			log.Err(err))
 
 		return fallback, nil
@@ -240,9 +245,11 @@ func (m *Manager) ResolveService(ctx context.Context, name string, fallback Serv
 			return Service{}, fmt.Errorf("%w: %q", ErrDiscoveryDisabledNoFallback, name)
 		}
 
-		m.logger.Log(ctx, log.LevelDebug, "discovery disabled — using fallback",
+		m.logger.Log(ctx, log.LevelInfo, "service resolved",
 			log.String("service", name),
-			log.String("fallback", fallback.Addr()))
+			log.String("addr", fallback.Addr()),
+			log.String("source", "fallback"),
+			log.String("reason", "discovery disabled"))
 
 		return fallback, nil
 	}
@@ -254,9 +261,10 @@ func (m *Manager) ResolveService(ctx context.Context, name string, fallback Serv
 
 	svc, err := m.registry.Resolve(ctx, name, tag)
 	if err == nil {
-		m.logger.Log(ctx, log.LevelDebug, "consul resolved",
+		m.logger.Log(ctx, log.LevelInfo, "service resolved",
 			log.String("service", name),
 			log.String("addr", svc.Addr()),
+			log.String("source", "consul"),
 			log.String("scheme", svc.Scheme),
 			log.String("workload", m.workload))
 
@@ -264,9 +272,11 @@ func (m *Manager) ResolveService(ctx context.Context, name string, fallback Serv
 	}
 
 	if fallback.Address != "" {
-		m.logger.Log(ctx, log.LevelWarn, "consul resolve failed — using fallback",
+		m.logger.Log(ctx, log.LevelWarn, "service resolved",
 			log.String("service", name),
-			log.String("fallback", fallback.Addr()),
+			log.String("addr", fallback.Addr()),
+			log.String("source", "fallback"),
+			log.String("reason", "consul resolve failed"),
 			log.Err(err))
 
 		return fallback, nil
