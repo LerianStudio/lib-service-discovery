@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/LerianStudio/lib-observability v1.1.0
-	github.com/hashicorp/consul/api v1.34.2
+	github.com/hashicorp/consul/api v1.34.3
 	github.com/stretchr/testify v1.11.1
 )
 
