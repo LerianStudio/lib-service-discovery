@@ -1,9 +1,20 @@
-# Changelog
+# Lib-service-discovery Changelog
 
-All notable changes to this project are documented here.
+## [0.6.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v0.6.0)
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Features:
+- Added `RegisterAsync` method for non-blocking service registration with retries. (@guimoreirar)
+- Implemented self-healing mechanisms for TTL checks in Consul. (@guimoreirar)
+- Created unit tests for Consul service registration and resolution. (@guimoreirar)
+- Developed a Dockerfile for demo services using a multi-stage build process. (@guimoreirar)
+- Introduced a `docker-compose` setup for local Consul and service chain demonstrations. (@guimoreirar)
+
+Improvements:
+- Enhanced CI workflows with new configurations and coverage filtering. (@guimoreirar)
+
+[Compare changes](https://github.com/LerianStudio/lib-service-discovery/compare/v0.5.0...v0.6.0)
+
+---
 
 ## [Unreleased]
 
@@ -79,3 +90,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [v0.2.0]: https://github.com/LerianStudio/lib-service-discovery/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/LerianStudio/lib-service-discovery/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/LerianStudio/lib-service-discovery/releases/tag/v0.1.0
+
