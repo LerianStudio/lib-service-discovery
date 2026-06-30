@@ -41,6 +41,17 @@ test-cover: ## Run unit tests with coverage report
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
+.PHONY: coverage-unit
+coverage-unit: ## Run unit tests with coverage, filtered by .ignorecoverunit (used by CI)
+	go test -tags unit -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+	@if [ -f .ignorecoverunit ]; then \
+		patterns=$$(grep -vE '^[[:space:]]*#' .ignorecoverunit | grep -vE '^[[:space:]]*$$'); \
+		for p in $$patterns; do \
+			grep -v "$$p" coverage.out > coverage.out.tmp && mv coverage.out.tmp coverage.out; \
+		done; \
+	fi
+	@go tool cover -func=coverage.out | tail -1
+
 ##@ Services
 
 .PHONY: up
