@@ -1,0 +1,69 @@
+# lib-service-discovery demo: a local Consul plus a 3-service chain
+# (svc-a -> svc-b -> svc-c). Each service registers itself and resolves the next
+# one by name through the library — no hardcoded inter-service addresses.
+#
+#   make up                          # build + start everything
+#   curl http://localhost:8081/ping  # svc-a -> svc-b -> svc-c
+#   curl http://localhost:8081/whoami
+#   make down
+services:
+  consul:
+    image: hashicorp/consul:1.19
+    command: agent -dev -client=0.0.0.0 -ui
+    ports:
+      - "8500:8500"
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  svc-a:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    environment:
+      SERVICE_NAME: svc-a
+      NEXT: svc-b
+      SD_ENABLED: "true"
+      SD_ADDRESS: consul:8500
+      SD_ADVERTISE_ADDRESS: svc-a
+      SD_ADVERTISE_PORT: "8081"
+    ports:
+      - "8081:8081"
+    depends_on:
+      consul:
+        condition: service_healthy
+
+  svc-b:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    environment:
+      SERVICE_NAME: svc-b
+      NEXT: svc-c
+      SD_ENABLED: "true"
+      SD_ADDRESS: consul:8500
+      SD_ADVERTISE_ADDRESS: svc-b
+      SD_ADVERTISE_PORT: "8082"
+    ports:
+      - "8082:8082"
+    depends_on:
+      consul:
+        condition: service_healthy
+
+  svc-c:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    environment:
+      SERVICE_NAME: svc-c
+      SD_ENABLED: "true"
+      SD_ADDRESS: consul:8500
+      SD_ADVERTISE_ADDRESS: svc-c
+      SD_ADVERTISE_PORT: "8083"
+    ports:
+      - "8083:8083"
+    depends_on:
+      consul:
+        condition: service_healthy

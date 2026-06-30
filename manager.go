@@ -157,6 +157,41 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 	return m.registry.Register(ctx, svc)
 }
 
+// RegisterAsync registers svc without blocking the caller and without failing
+// startup: it retries in the background with exponential backoff until Register
+// succeeds or ctx is cancelled. Use it when the service must come up even if the
+// discovery server is briefly unavailable at boot — boot no longer depends on
+// Consul being reachable. Pass an app-lifetime ctx (the one cancelled on
+// shutdown), not a request-scoped one. No-op when discovery is disabled.
+func (m *Manager) RegisterAsync(ctx context.Context, svc Service) {
+	if m == nil || !m.config.Enabled {
+		return
+	}
+
+	go func() {
+		for attempt := 0; ; attempt++ {
+			if err := m.Register(ctx, svc); err == nil {
+				if attempt > 0 {
+					m.logger.Log(ctx, log.LevelInfo, "service registered after retry",
+						log.String("name", svc.Name),
+						log.Int("attempts", attempt))
+				}
+
+				return
+			} else {
+				m.logger.Log(ctx, log.LevelWarn, "register attempt failed; will retry",
+					log.String("name", svc.Name),
+					log.Int("attempt", attempt),
+					log.Err(err))
+			}
+
+			if !sleepCtx(ctx, backoffDuration(attempt)) {
+				return
+			}
+		}
+	}()
+}
+
 // healthCheckURL builds the URL Consul probes for an HTTP health check, honoring
 // the service scheme (defaulting to "http") and path (defaulting to "/health").
 func healthCheckURL(scheme, addr string, port int, path string) string {
