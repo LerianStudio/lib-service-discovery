@@ -3,6 +3,7 @@ package libsd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -121,7 +122,7 @@ func (r *consulRegistry) Register(ctx context.Context, svc Service) error {
 		log.String("addr", svc.Addr()))
 
 	if ttl != "" {
-		r.startHeartbeat(svc.ID, ttl)
+		r.startHeartbeat(reg, ttl)
 	}
 
 	return nil
@@ -132,10 +133,31 @@ func ttlCheckID(serviceID string) string {
 	return "service:" + serviceID
 }
 
+// isUnknownCheck reports whether err means the TTL check no longer exists in
+// Consul (HTTP 404 from UpdateTTL) — the trigger for self-healing re-registration.
+// The Consul SDK returns a plain error for this, so we match on the response text.
+func isUnknownCheck(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	s := err.Error()
+
+	return strings.Contains(s, "404") ||
+		strings.Contains(s, "does not exist") ||
+		strings.Contains(s, "Unknown check")
+}
+
 // startHeartbeat marks the TTL check passing immediately and then re-passes it
 // every TTL/2 from a background goroutine until Deregister cancels it. The
 // heartbeat is an OUTBOUND call to Consul, so it works from any network.
-func (r *consulRegistry) startHeartbeat(serviceID, ttl string) {
+//
+// Self-heal: when a heartbeat finds the check unknown (HTTP 404 — the
+// registration vanished because Consul restarted, or a server-only/agentless
+// catalog dropped it), it re-registers the service to recreate the check and
+// resumes, instead of failing every TTL/2 forever.
+func (r *consulRegistry) startHeartbeat(reg *api.AgentServiceRegistration, ttl string) {
+	serviceID := reg.ID
 	checkID := ttlCheckID(serviceID)
 
 	interval := ttlHeartbeatFloor
@@ -148,10 +170,36 @@ func (r *consulRegistry) startHeartbeat(serviceID, ttl string) {
 
 	pass := func() {
 		opts := (&api.QueryOptions{}).WithContext(ctx)
-		if err := r.client.Agent().UpdateTTLOpts(checkID, "lib-service-discovery heartbeat", api.HealthPassing, opts); err != nil {
+
+		err := r.client.Agent().UpdateTTLOpts(checkID, "lib-service-discovery heartbeat", api.HealthPassing, opts)
+		if err == nil {
+			return
+		}
+
+		if !isUnknownCheck(err) {
 			r.logger.Log(ctx, log.LevelWarn, "ttl heartbeat failed",
 				log.String("check", checkID),
 				log.Err(err))
+
+			return
+		}
+
+		// The check is gone — re-register to recreate it, then re-pass.
+		r.logger.Log(ctx, log.LevelWarn, "ttl check unknown; re-registering service",
+			log.String("id", serviceID))
+
+		if regErr := r.client.Agent().ServiceRegisterOpts(reg, (api.ServiceRegisterOpts{}).WithContext(ctx)); regErr != nil {
+			r.logger.Log(ctx, log.LevelWarn, "self-heal re-register failed",
+				log.String("id", serviceID),
+				log.Err(regErr))
+
+			return
+		}
+
+		if err2 := r.client.Agent().UpdateTTLOpts(checkID, "lib-service-discovery heartbeat", api.HealthPassing, opts); err2 != nil {
+			r.logger.Log(ctx, log.LevelWarn, "ttl heartbeat failed after re-register",
+				log.String("check", checkID),
+				log.Err(err2))
 		}
 	}
 
@@ -231,82 +279,99 @@ func (r *consulRegistry) Watch(ctx context.Context, name string) (<-chan Event, 
 
 	ch := make(chan Event, 16)
 
-	go func() {
-		defer close(ch)
-
-		var (
-			lastIndex uint64
-			attempt   int
-		)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			entries, meta, err := r.client.Health().Service(name, "", false, (&api.QueryOptions{
-				WaitIndex: lastIndex,
-				WaitTime:  watchWaitTime,
-			}).WithContext(ctx))
-			if err != nil {
-				// ctx cancelled mid-poll: exit quietly, no backoff/log needed.
-				if ctx.Err() != nil {
-					return
-				}
-
-				r.logger.Log(ctx, log.LevelWarn, "consul watch poll failed",
-					log.String("service", name),
-					log.Int("attempt", attempt),
-					log.Err(err))
-
-				// Backoff so a Consul outage doesn't busy-loop the goroutine.
-				if !sleepCtx(ctx, backoffDuration(attempt)) {
-					return
-				}
-
-				attempt++
-
-				continue
-			}
-
-			attempt = 0
-
-			// Consul restarted and the index rewound; re-baseline from scratch.
-			if meta.LastIndex < lastIndex {
-				lastIndex = 0
-
-				continue
-			}
-
-			if meta.LastIndex == lastIndex {
-				continue
-			}
-
-			lastIndex = meta.LastIndex
-
-			for _, e := range entries {
-				eventType := EventRegistered
-
-				for _, check := range e.Checks {
-					if check.Status == api.HealthCritical {
-						eventType = EventDeregistered
-
-						break
-					}
-				}
-
-				select {
-				case ch <- Event{Type: eventType, Service: serviceFromEntry(e)}:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
+	go r.watchLoop(ctx, name, ch)
 
 	return ch, nil
+}
+
+// watchLoop drives a Consul blocking query for name, emitting an Event per entry
+// each time the catalog index advances, until ctx is cancelled. A failed poll
+// backs off exponentially so an outage never busy-loops the goroutine.
+func (r *consulRegistry) watchLoop(ctx context.Context, name string, ch chan<- Event) {
+	defer close(ch)
+
+	var (
+		lastIndex uint64
+		attempt   int
+	)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		entries, meta, err := r.client.Health().Service(name, "", false, (&api.QueryOptions{
+			WaitIndex: lastIndex,
+			WaitTime:  watchWaitTime,
+		}).WithContext(ctx))
+		if err != nil {
+			// ctx cancelled mid-poll: exit quietly, no backoff/log needed.
+			if ctx.Err() != nil {
+				return
+			}
+
+			r.logger.Log(ctx, log.LevelWarn, "consul watch poll failed",
+				log.String("service", name),
+				log.Int("attempt", attempt),
+				log.Err(err))
+
+			// Backoff so a Consul outage doesn't busy-loop the goroutine.
+			if !sleepCtx(ctx, backoffDuration(attempt)) {
+				return
+			}
+
+			attempt++
+
+			continue
+		}
+
+		attempt = 0
+
+		// Consul restarted and the index rewound; re-baseline from scratch.
+		if meta.LastIndex < lastIndex {
+			lastIndex = 0
+
+			continue
+		}
+
+		if meta.LastIndex == lastIndex {
+			continue
+		}
+
+		lastIndex = meta.LastIndex
+
+		if !emitEntries(ctx, ch, entries) {
+			return
+		}
+	}
+}
+
+// emitEntries sends one Event per entry to ch, returning false if ctx is
+// cancelled mid-send so the watch loop can stop.
+func emitEntries(ctx context.Context, ch chan<- Event, entries []*api.ServiceEntry) bool {
+	for _, e := range entries {
+		select {
+		case ch <- Event{Type: eventTypeFor(e), Service: serviceFromEntry(e)}:
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	return true
+}
+
+// eventTypeFor classifies an entry as deregistered when any of its checks is
+// critical, otherwise registered.
+func eventTypeFor(e *api.ServiceEntry) EventType {
+	for _, check := range e.Checks {
+		if check.Status == api.HealthCritical {
+			return EventDeregistered
+		}
+	}
+
+	return EventRegistered
 }
 
 // serviceFromEntry maps a Consul health entry to a Service, recovering the
