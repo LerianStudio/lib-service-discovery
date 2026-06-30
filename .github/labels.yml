@@ -1,0 +1,50 @@
+# Label definitions for lib-service-discovery
+# Synced via .github/workflows/routine.yml -> shared labels-sync.
+
+# ── Scopes (aligned with .github/labeler.yml and pr-validation.yml) ───────────
+
+- name: consul
+  color: "d62728"
+  description: Consul registry backend
+
+- name: core
+  color: "1d76db"
+  description: Public API — Manager, Registry, domain types, config
+
+- name: config
+  color: "0e8a16"
+  description: Application and tooling configuration
+
+- name: demo
+  color: "5319e7"
+  description: Demo services and docker-compose
+
+- name: ci
+  color: "fbca04"
+  description: CI pipelines and automation configs
+
+- name: deps
+  color: "0366d6"
+  description: Go module dependencies
+
+- name: docs
+  color: "006b75"
+  description: Documentation and markdown
+
+- name: security
+  color: "b60205"
+  description: Security and TLS/ACL handling
+
+- name: tests
+  color: "c2e0c6"
+  description: Unit and integration tests
+
+# ── Automation ────────────────────────────────────────────────────────────────
+
+- name: backmerge
+  color: "bfdadc"
+  description: Automated main -> develop backmerge
+
+- name: automated
+  color: "ededed"
+  description: Opened by automation

@@ -1,0 +1,5 @@
+# Coverage exclusion patterns for unit tests.
+# Lines starting with # are comments. Use * as a wildcard for path matching.
+
+# Demo binary (svc-a/b/c) — illustrative, not part of the library surface.
+services/

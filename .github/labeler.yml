@@ -1,0 +1,65 @@
+# Pull Request Labeler configuration
+#
+# Labels are aligned with the pr_title_scopes in pr-validation.yml.
+
+# Consul registry backend
+consul:
+  - changed-files:
+      - any-glob-to-any-file: 'consul.go'
+
+# Public API: Manager, Registry, domain types, config
+core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'manager.go'
+          - 'types.go'
+          - 'config.go'
+          - 'doc.go'
+
+# Demo services and compose
+demo:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'services/**/*'
+          - 'docker-compose.yml'
+
+# Application and tooling configuration
+config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.golangci.yml'
+          - '.golangci.yaml'
+          - '.releaserc.yml'
+          - '.releaserc.yaml'
+          - '.goreleaser.yml'
+          - '.goreleaser.yaml'
+          - '.ignorecoverunit'
+
+# Continuous integration pipelines and automation configs
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**/*'
+          - '.github/labeler.yml'
+          - '.github/labels.yml'
+          - '.github/dependabot.yml'
+
+# Markdown docs and context files
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - 'docs/**/*'
+
+# Unit and integration tests
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*_test.go'
+
+# Go module dependencies
+deps:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'go.mod'
+          - 'go.sum'

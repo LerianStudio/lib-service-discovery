@@ -1,31 +1,31 @@
-name: "Go Combined Analysis"
+name: Go Combined Analysis
 
 on:
   pull_request:
-    branches:
-      - develop
-      - main
-    types:
-      - opened
-      - edited
-      - synchronize
-      - reopened
+    branches: [develop, main]
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
 
 permissions:
-  id-token: write
   contents: read
-  pull-requests: write
-  actions: read
-  security-events: write
-  
-#EXECUTE PRE-STEPS OF GOLANG VERIFICATION
+
 jobs:
   go-analysis:
-    uses: LerianStudio/github-actions-go-pipeline-template/.github/workflows/analysis.yml@main
-    secrets:
-      lerian_studio_push_bot_app_id: ${{ secrets.LERIAN_STUDIO_MIDAZ_PUSH_BOT_APP_ID }}
-      lerian_studio_push_bot_private_key: ${{ secrets.LERIAN_STUDIO_MIDAZ_PUSH_BOT_PRIVATE_KEY }}
-      lerian_ci_cd_user_gpg_key: ${{ secrets.LERIAN_CI_CD_USER_GPG_KEY }}
-      lerian_ci_cd_user_gpg_key_password: ${{ secrets.LERIAN_CI_CD_USER_GPG_KEY_PASSWORD }}
-      lerian_ci_cd_user_name: ${{ secrets.LERIAN_CI_CD_USER_NAME }}
-      lerian_ci_cd_user_email: ${{ secrets.LERIAN_CI_CD_USER_EMAIL }}
+    name: Go Analysis
+    uses: LerianStudio/github-actions-shared-workflows/.github/workflows/go-pr-analysis.yml@v1.33.0
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      security-events: write
+    with:
+      go_version: "1.26.3"
+      golangci_lint_version: "v2.12.2"
+      coverage_threshold: 80
+      fail_on_coverage_threshold: true
+      go_private_modules: "github.com/LerianStudio/*"
+    secrets: inherit
