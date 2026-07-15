@@ -166,8 +166,20 @@ sd, err := libsd.New(libsd.Config{
     Enabled:    true,
     ConsulAddr: "localhost:8500",
 }, libsd.WithLogger(logger))
-// sd.Resolve(ctx, "svc-b", "svc-b:8082")  → OK
-// sd.Register(ctx, svc)                    → ErrNoEndpoint
+if err != nil {
+    return err
+}
+defer sd.Close() // stop background watchers on shutdown
+
+// Resolving works (falls back to "svc-b:8082" when discovery is unavailable).
+addr, err := sd.Resolve(ctx, "svc-b", "svc-b:8082")
+if err != nil {
+    return err
+}
+_ = addr
+
+// Registering would fail — a consumer-only Manager has no advertise address:
+//   sd.Register(ctx, svc) → ErrNoEndpoint
 ```
 
 #### Deprecated flat fields
