@@ -211,9 +211,13 @@ func (m *Manager) seedManagedResolver(ctx context.Context, mr *managedResolver, 
 			log.Err(err))
 	} else {
 		mr.store(svc)
-		m.logger.Log(ctx, log.LevelInfo, "service resolved",
+		// Cache-seed event (the watch's initial populate), Debug only. No addr: the
+		// stored Service carries both views and svc.Addr() is just the primary/
+		// root-routable (usually external) mirror, which misleads when a consumer
+		// prefers internal. The consumer-facing, view-selected address is logged as
+		// "endpoint resolved" (Info) by resolveEndpoint.
+		m.logger.Log(ctx, log.LevelDebug, "managed resolver seeded",
 			log.String("service", name),
-			log.String("addr", svc.Addr()),
 			log.String("source", "consul"),
 			log.String("workload", m.workload))
 	}
@@ -296,8 +300,10 @@ func (m *Manager) runManagedUpdates(ctx context.Context, mr *managedResolver, ch
 		}
 
 		mr.store(svc)
+		// Cache-refresh event (catalog changed). No addr for the same reason as the
+		// seed: svc.Addr() is the primary/root-routable mirror; the view-selected
+		// address is logged as "endpoint resolved" by resolveEndpoint.
 		m.logger.Log(ctx, log.LevelDebug, "managed resolve updated",
-			log.String("service", name),
-			log.String("addr", svc.Addr()))
+			log.String("service", name))
 	}
 }
