@@ -11,6 +11,10 @@
 // This design allows gradual migration from hardcoded addresses to full service discovery
 // without requiring all services to be Consul-aware at once.
 //
+// A Manager may also run consumer-only: enable discovery with no advertise
+// address and it resolves and watches without ever registering itself. The
+// advertise requirement applies only to Register (see Config.Validate).
+//
 // # Resolution model: watch-and-cache
 //
 // There is ONE resolution pattern, not a query-per-request one. The first resolve
