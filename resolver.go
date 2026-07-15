@@ -139,6 +139,7 @@ func (m *Manager) WatchResolve(ctx context.Context, name, fallback string, opts 
 	// watcher for the same name.
 	seedCtx, cancel := context.WithTimeout(ctx, m.seedTimeout)
 	addr, err := m.resolveEndpointDirect(seedCtx, name, dr.view, fallback)
+
 	cancel() // release the seed deadline immediately; the watch uses ctx, not seedCtx.
 
 	if err != nil {
@@ -214,6 +215,7 @@ func (m *Manager) WatchResolveService(ctx context.Context, name string, fallback
 	// the fallback's (view-independent) addr+scheme and start the watch anyway.
 	seedCtx, cancel := context.WithTimeout(ctx, m.seedTimeout)
 	addr, scheme, err := m.seedServiceEndpoint(seedCtx, name, dr, fallback)
+
 	cancel() // release the seed deadline immediately; the watch uses ctx, not seedCtx.
 
 	if err != nil {

@@ -197,10 +197,10 @@ func ConfigFromEnv() Config {
 		TLSSkipVerify: os.Getenv("SD_TLS_SKIP_VERIFY") == "true",
 		Token:         os.Getenv("SD_TOKEN"),
 
-		DialTimeout:           firstEnvDuration(0, "SD_DIAL_TIMEOUT"),
-		TLSHandshakeTimeout:   firstEnvDuration(0, "SD_TLS_HANDSHAKE_TIMEOUT"),
-		ResponseHeaderTimeout: firstEnvDuration(0, "SD_RESPONSE_HEADER_TIMEOUT"),
-		SeedTimeout:           firstEnvDuration(0, "SD_SEED_TIMEOUT"),
+		DialTimeout:           firstEnvDuration("SD_DIAL_TIMEOUT"),
+		TLSHandshakeTimeout:   firstEnvDuration("SD_TLS_HANDSHAKE_TIMEOUT"),
+		ResponseHeaderTimeout: firstEnvDuration("SD_RESPONSE_HEADER_TIMEOUT"),
+		SeedTimeout:           firstEnvDuration("SD_SEED_TIMEOUT"),
 		AllowStale:            envBoolPtr("SD_ALLOW_STALE"),
 	}
 
@@ -387,8 +387,8 @@ func firstEnvInt(fallback int, keys ...string) int {
 
 // firstEnvDuration is firstEnv parsed as a time.Duration (e.g. "5s", "1m"). A
 // value that fails time.ParseDuration is skipped, so a malformed env var degrades
-// to the next key or the fallback instead of failing config loading.
-func firstEnvDuration(fallback time.Duration, keys ...string) time.Duration {
+// to the next key or zero instead of failing config loading.
+func firstEnvDuration(keys ...string) time.Duration {
 	for _, k := range keys {
 		if v := os.Getenv(k); v != "" {
 			if d, err := time.ParseDuration(v); err == nil {
@@ -397,7 +397,7 @@ func firstEnvDuration(fallback time.Duration, keys ...string) time.Duration {
 		}
 	}
 
-	return fallback
+	return 0
 }
 
 // envBoolPtr reads key as an optional bool. An unset, empty, or unparseable

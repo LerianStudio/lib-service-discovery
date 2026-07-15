@@ -145,6 +145,7 @@ func (m *Manager) seedManagedResolver(ctx context.Context, mr *managedResolver, 
 
 	seedCtx, cancel := context.WithTimeout(ctx, m.seedTimeout)
 	svc, err := m.registry.Resolve(seedCtx, name, tag)
+
 	cancel() // release the seed deadline immediately; the watch uses its own context.
 
 	if err != nil {
