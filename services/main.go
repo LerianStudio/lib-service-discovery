@@ -4,6 +4,12 @@
 // service by name and calls it. A single request to svc-a therefore walks the
 // svc-a -> svc-b -> svc-c chain using discovery only, with no hardcoded addresses.
 //
+// Watch-and-cache: instead of querying Consul on every request, each instance
+// with a downstream (NEXT set) builds ONE DynamicResolver at startup. A
+// background goroutine watches Consul and keeps the cached address fresh; the
+// request path only reads that in-memory address. So the hot path never touches
+// Consul, and if Consul goes down the last known-good address keeps being served.
+//
 //	make up                          # consul + svc-a + svc-b + svc-c
 //	curl http://localhost:8081/ping  # svc-a -> svc-b -> svc-c
 //	curl http://localhost:8081/whoami
@@ -26,12 +32,18 @@ import (
 func main() {
 	name := getenv("SERVICE_NAME", "svc-a")
 	next := os.Getenv("NEXT") // downstream service name; empty for the leaf
-	listen := ":" + getenv("SD_ADVERTISE_PORT", "8080")
+	// Derive the listen port from the advertised port. An internal-only service
+	// sets only SD_INTERNAL_PORT (no SD_ADVERTISE_PORT/SD_EXTERNAL_PORT), so fall
+	// back to it; otherwise the internal-only instance would bind the wrong port
+	// and callers resolving its internal endpoint could not reach it.
+	listen := ":" + getenv("SD_ADVERTISE_PORT", getenv("SD_INTERNAL_PORT", "8080"))
 
 	logger := &log.GoLogger{Level: log.LevelDebug}
 	ctx := context.Background()
 
-	sd, err := libsd.New(libsd.ConfigFromEnv(), libsd.WithLogger(logger))
+	cfg := libsd.ConfigFromEnv()
+
+	sd, err := libsd.New(cfg, libsd.WithLogger(logger))
 	if err != nil {
 		logger.Log(ctx, log.LevelError, "init service discovery", log.Err(err))
 		os.Exit(1)
@@ -46,6 +58,27 @@ func main() {
 		HealthCheck: &libsd.HealthCheck{TTL: "15s"},
 	})
 
+	// Build ONE DynamicResolver per downstream. The leaf (svc-c, no NEXT) resolves
+	// nobody, so it never creates one — resolver stays nil there.
+	//
+	// No WithView here on purpose: WatchResolve inherits the Manager's configured
+	// SD_PREFER_VIEW (internal for this demo), matching the old one-shot behaviour.
+	// Empty fallback keeps strict mode: with no Consul instance the cached address
+	// stays empty and the handler fails open rather than dialling a bogus addr.
+	//
+	// In enabled mode WatchResolve is fail-open (a bad seed is logged, not fatal),
+	// so a non-nil err here is a programmer error only — log it and carry on with a
+	// nil resolver (the /ping handler treats an empty address as "not resolved yet").
+	var resolver *libsd.DynamicResolver
+
+	if next != "" {
+		resolver, err = sd.WatchResolve(ctx, next, "" /* fallback */)
+		if err != nil {
+			logger.Log(ctx, log.LevelError, "start dynamic resolver",
+				log.String("next", next), log.Err(err))
+		}
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -55,9 +88,16 @@ func main() {
 			return
 		}
 
-		addr, err := sd.Resolve(r.Context(), next, "")
-		if err != nil {
-			http.Error(w, fmt.Sprintf("resolve %s: %v", next, err), http.StatusBadGateway)
+		// Hot path never touches Consul: resolver.Address() reads the in-memory
+		// cache kept fresh by the background watch goroutine. Consul is queried only
+		// by that watcher, never here — so if Consul is down the last known-good
+		// address keeps being served. resolver.Address() is nil-safe (returns "").
+		addr := resolver.Address()
+		if addr == "" {
+			// Degraded: seed hasn't populated (Consul unreachable at boot with no
+			// fallback) or the resolver failed to start. Fail open with 503 instead
+			// of dialling a bogus address, so the degraded state is observable.
+			http.Error(w, fmt.Sprintf("downstream %s not resolved yet", next), http.StatusServiceUnavailable)
 
 			return
 		}
@@ -78,7 +118,11 @@ func main() {
 	})
 
 	mux.HandleFunc("/whoami", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, "service=%s listen=%s next=%q\n", name, listen, next)
+		// resolver.Address() is nil-safe, so the leaf (nil resolver) prints "".
+		// Exposing the cached address makes it observable that the hot path serves
+		// the address from the DynamicResolver cache, not a per-request Consul query.
+		fmt.Fprintf(w, "service=%s listen=%s next=%q prefer_view=%s next_addr=%q\n",
+			name, listen, next, cfg.PreferView, resolver.Address())
 	})
 
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
@@ -102,7 +146,12 @@ func main() {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Stop the background watch goroutine so it does not leak (nil-safe on the leaf).
+	resolver.Stop()
+
 	_ = sd.Deregister(shutCtx, id)
+	// Close stops the Manager's own background goroutines (TTL heartbeats).
+	_ = sd.Close()
 	_ = srv.Shutdown(shutCtx)
 }
 

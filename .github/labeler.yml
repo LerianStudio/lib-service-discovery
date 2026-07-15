@@ -7,11 +7,12 @@ consul:
   - changed-files:
       - any-glob-to-any-file: 'consul.go'
 
-# Public API: Manager, Registry, domain types, config
+# Public API: Manager, Registry, dynamic resolver, domain types, config
 core:
   - changed-files:
       - any-glob-to-any-file:
           - 'manager.go'
+          - 'resolver.go'
           - 'types.go'
           - 'config.go'
           - 'doc.go'

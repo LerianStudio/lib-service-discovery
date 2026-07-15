@@ -4,6 +4,7 @@ package libsd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -32,6 +33,9 @@ func integrationManager(t *testing.T) *Manager {
 		Logger:        log.NewNop(),
 	})
 	require.NoError(t, err)
+
+	// Stop the managed-resolver watch goroutines started by resolve calls.
+	t.Cleanup(func() { _ = m.Close() })
 
 	return m
 }
@@ -127,9 +131,9 @@ func TestIntegration_Deregister(t *testing.T) {
 	ctx := context.Background()
 
 	svc := Service{
-		ID:   fmt.Sprintf("test-svc-dereg-%d", port),
-		Name: fmt.Sprintf("test-svc-dereg-%d", port),
-		Port: port,
+		ID:          fmt.Sprintf("test-svc-dereg-%d", port),
+		Name:        fmt.Sprintf("test-svc-dereg-%d", port),
+		Port:        port,
 		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"},
 	}
 
@@ -138,8 +142,19 @@ func TestIntegration_Deregister(t *testing.T) {
 
 	require.NoError(t, m.Deregister(ctx, svc.ID))
 
-	_, err := m.Resolve(ctx, svc.Name, "")
-	assert.ErrorIs(t, err, ErrNoHealthyInstances)
+	// Under watch-and-cache, the manager that already resolved this name keeps its
+	// last-known-good value until its background watch observes the deregistration —
+	// it does NOT flip to an error on the next read. A FRESH manager (empty seed)
+	// resolving after the deregistration is what surfaces ErrNoHealthyInstances, so
+	// assert against a fresh manager. Eventually absorbs any catalog propagation lag.
+	require.Eventually(t, func() bool {
+		fresh := integrationManager(t)
+
+		_, err := fresh.Resolve(ctx, svc.Name, "")
+
+		return errors.Is(err, ErrNoHealthyInstances)
+	}, 10*time.Second, 500*time.Millisecond,
+		"a fresh manager resolving a deregistered service must get ErrNoHealthyInstances")
 }
 
 func TestIntegration_Watch(t *testing.T) {
@@ -150,9 +165,9 @@ func TestIntegration_Watch(t *testing.T) {
 	t.Cleanup(cancel)
 
 	svc := Service{
-		ID:   fmt.Sprintf("test-svc-watch-%d", port),
-		Name: fmt.Sprintf("test-svc-watch-%d", port),
-		Port: port,
+		ID:          fmt.Sprintf("test-svc-watch-%d", port),
+		Name:        fmt.Sprintf("test-svc-watch-%d", port),
+		Port:        port,
 		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"},
 	}
 
@@ -234,8 +249,44 @@ func TestIntegration_ResolveContextCancelled(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestIntegration_ResolveHonorsDialTimeout proves the DialTimeout wired into the
+// transport's DialContext actually bounds connection establishment. It points a
+// Manager at a non-routable/blackhole address (RFC 5735 10.255.255.1, which
+// silently drops SYNs so the dial hangs until the deadline) with a short
+// DialTimeout, then asserts Resolve fails well inside that deadline — far below
+// the fast client's ResponseHeaderTimeout. A regression that zeroed DialTimeout
+// would let the dial hang and this test would exceed the assertion bound.
+func TestIntegration_ResolveHonorsDialTimeout(t *testing.T) {
+	const dialTimeout = 200 * time.Millisecond
+
+	m, err := New(Config{
+		Enabled:       true,
+		ConsulAddr:    "10.255.255.1:8500", // blackhole: SYNs are dropped, dial hangs until deadline
+		AdvertiseAddr: advertiseAddr,
+		DialTimeout:   dialTimeout,
+		Logger:        log.NewNop(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = m.Close() })
+
+	start := time.Now()
+	_, resolveErr := m.Resolve(context.Background(), "any-svc", "")
+	elapsed := time.Since(start)
+
+	require.Error(t, resolveErr, "resolve against a blackhole must fail")
+	assert.Less(t, elapsed, 2*time.Second,
+		"resolve must fail within the dial deadline (got %s, dial timeout %s)", elapsed, dialTimeout)
+}
+
 // TestIntegration_ResolveRoundRobin verifies #4: with multiple healthy instances,
-// Resolve spreads requests across them instead of always returning the first.
+// each registry resolve spreads requests across them instead of always returning
+// the first.
+//
+// Round-robin is a REGISTRY-layer behavior. Under the watch-and-cache model the
+// Manager's one-shot Resolve serves a single cached Service and no longer spreads
+// per read (spreading now happens on the seed and on each watch-driven refresh),
+// so this test exercises round-robin where it lives — directly on the registry
+// backend (accessible from this in-package test).
 func TestIntegration_ResolveRoundRobin(t *testing.T) {
 	p1 := startHealthServer(t)
 	p2 := startHealthServer(t)
@@ -257,17 +308,21 @@ func TestIntegration_ResolveRoundRobin(t *testing.T) {
 		t.Cleanup(func() { _ = m.Deregister(context.Background(), id) })
 	}
 
-	// Once both instances are healthy, round-robin must surface both ports.
+	reg, ok := m.registry.(*consulRegistry)
+	require.True(t, ok, "the default backend must be *consulRegistry")
+
+	// Once both instances are healthy, repeated registry resolves must surface both
+	// ports (round-robin across healthy instances).
 	seen := map[string]bool{}
 
 	require.Eventually(t, func() bool {
-		addr, err := m.Resolve(ctx, name, "")
+		svc, err := reg.Resolve(ctx, name, "")
 		if err == nil {
-			seen[addr] = true
+			seen[svc.Addr()] = true
 		}
 
 		return len(seen) >= 2
-	}, 20*time.Second, 200*time.Millisecond, "expected Resolve to return both instances")
+	}, 20*time.Second, 200*time.Millisecond, "expected registry round-robin to return both instances")
 
 	assert.Len(t, seen, 2)
 }

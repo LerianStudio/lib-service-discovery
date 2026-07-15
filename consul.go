@@ -3,12 +3,16 @@ package libsd
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/LerianStudio/lib-observability/log"
+	obsruntime "github.com/LerianStudio/lib-observability/runtime"
 	"github.com/hashicorp/consul/api"
 )
 
@@ -29,8 +33,21 @@ const (
 )
 
 type consulRegistry struct {
+	// client is the "fast" client for short request/response exchanges
+	// (Register/Deregister/Resolve/heartbeat). Its transport carries a
+	// ResponseHeaderTimeout so a hung Consul fails fast.
 	client *api.Client
-	logger log.Logger
+	// watchClient is the "watch" client for blocking catalog queries. Its
+	// transport deliberately omits ResponseHeaderTimeout: a blocking query
+	// withholds headers until the catalog index advances (up to watchWaitTime), so
+	// a response-header deadline would abort healthy long-polls.
+	watchClient *api.Client
+	logger      log.Logger
+
+	// allowStale opts catalog reads (Resolve/Watch) into Consul stale mode via
+	// QueryOptions.AllowStale. Derived from Config.AllowStale (a *bool, resolved to
+	// a concrete bool by withDefaults, which defaults nil → true / stale reads).
+	allowStale bool
 
 	// rr is a round-robin cursor used by Resolve to spread load across healthy
 	// instances instead of always returning the first one.
@@ -42,13 +59,22 @@ type consulRegistry struct {
 	heartbeats map[string]context.CancelFunc
 }
 
-func newConsulRegistry(c Config, logger log.Logger) (Registry, error) {
-	if logger == nil {
-		logger = log.NewNop()
-	}
-
+// newTunedConfig builds an *api.Config wired to a connection-hardened
+// *http.Transport. The dial and TLS-handshake timeouts bound connection
+// establishment against a dead single-node Consul without ever truncating a
+// blocking query (those are transport-level, not whole-request, deadlines).
+//
+// When fast is true the transport also carries a ResponseHeaderTimeout — safe
+// for the short request/response client. When fast is false (the watch client)
+// the ResponseHeaderTimeout is left zero, because a Consul blocking query
+// legitimately withholds response headers until the catalog index advances.
+//
+// TLS options (scheme, InsecureSkipVerify, token) flow through cfg the same way
+// the SDK expects: Transport.TLSClientConfig is left nil so consul's
+// NewHttpClient applies cfg.TLSConfig to the transport it wraps.
+func newTunedConfig(c Config, fast bool) *api.Config {
 	// DefaultConfig still honors the SDK's own CONSUL_HTTP_* env vars as a
-	// fallback; explicit SD_* values (TLS/Token) take precedence below.
+	// fallback; explicit SD_* values (Address/TLS/Token) take precedence below.
 	cfg := api.DefaultConfig()
 	cfg.Address = c.ConsulAddr
 
@@ -64,16 +90,78 @@ func newConsulRegistry(c Config, logger log.Logger) (Registry, error) {
 		cfg.Token = c.Token
 	}
 
-	client, err := api.NewClient(cfg)
+	// A fresh transport mirroring http.DefaultTransport's pooling, with the tuned
+	// connection-establishment timeouts. TLSClientConfig stays nil on purpose (see
+	// the doc comment) so consul applies cfg.TLSConfig.
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   c.DialTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      100,
+		// All traffic (fast + watch) targets a single Consul host, so the Go
+		// default of 2 idle conns per host caps reuse and forces handshake churn
+		// under concurrent resolves. Match MaxIdleConns so the pool can actually
+		// hold the connections it is allowed to keep open.
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   c.TLSHandshakeTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	if fast {
+		transport.ResponseHeaderTimeout = c.ResponseHeaderTimeout
+	}
+
+	cfg.Transport = transport
+
+	return cfg
+}
+
+func newConsulRegistry(c Config, logger log.Logger) (Registry, error) {
+	if logger == nil {
+		logger = log.NewNop()
+	}
+
+	client, err := api.NewClient(newTunedConfig(c, true))
 	if err != nil {
 		return nil, fmt.Errorf("consul: create client: %w", err)
 	}
 
+	watchClient, err := api.NewClient(newTunedConfig(c, false))
+	if err != nil {
+		return nil, fmt.Errorf("consul: create watch client: %w", err)
+	}
+
+	// c is expected to have passed through withDefaults (New always applies it),
+	// so AllowStale is non-nil; the nil-guard keeps a direct caller that bypassed
+	// withDefaults safe and mirrors the withDefaults default (nil → true / stale).
+	allowStale := true
+	if c.AllowStale != nil {
+		allowStale = *c.AllowStale
+	}
+
 	return &consulRegistry{
-		client:     client,
-		logger:     logger,
-		heartbeats: make(map[string]context.CancelFunc),
+		client:      client,
+		watchClient: watchClient,
+		allowStale:  allowStale,
+		logger:      logger,
+		heartbeats:  make(map[string]context.CancelFunc),
 	}, nil
+}
+
+// queryOpts returns the QueryOptions used for catalog reads, carrying the
+// configured AllowStale mode and bound to ctx. It is nil-receiver safe like the
+// rest of the library: a nil registry yields strong-read defaults (AllowStale
+// false) still bound to ctx.
+func (r *consulRegistry) queryOpts(ctx context.Context) *api.QueryOptions {
+	if r == nil {
+		return (&api.QueryOptions{}).WithContext(ctx)
+	}
+
+	return (&api.QueryOptions{AllowStale: r.allowStale}).WithContext(ctx)
 }
 
 func (r *consulRegistry) Register(ctx context.Context, svc Service) error {
@@ -81,13 +169,25 @@ func (r *consulRegistry) Register(ctx context.Context, svc Service) error {
 		return ErrNilRegistry
 	}
 
+	// Write-path normalization: promote a legacy flat-only caller into External and
+	// mirror the root routable endpoint back into the flat fields, so both the
+	// registrable address and the serialized Meta are derived consistently.
+	svc.normalizeEndpoints()
+
 	reg := &api.AgentServiceRegistration{
-		ID:      svc.ID,
-		Name:    svc.Name,
-		Address: svc.Address,
-		Port:    svc.Port,
-		Tags:    svc.Tags,
-		Meta:    metaWithScheme(svc),
+		ID:   svc.ID,
+		Name: svc.Name,
+		Tags: svc.Tags,
+		Meta: serviceMeta(svc),
+	}
+
+	// The registrable (root) address is the external endpoint when advertised, else
+	// the internal endpoint, else zero. Validate guarantees at least one is present
+	// for Manager callers; the nil-guard is defensive for direct Registry callers.
+	root := svc.rootEndpoint()
+	if root != nil {
+		reg.Address = root.Address
+		reg.Port = root.Port
 	}
 
 	ttl := ""
@@ -116,10 +216,15 @@ func (r *consulRegistry) Register(ctx context.Context, svc Service) error {
 		return fmt.Errorf("consul: register %s: %w", svc.Name, err)
 	}
 
+	rootAddr := ""
+	if root != nil {
+		rootAddr = root.Addr()
+	}
+
 	r.logger.Log(ctx, log.LevelDebug, "service registered",
 		log.String("id", svc.ID),
 		log.String("name", svc.Name),
-		log.String("addr", svc.Addr()))
+		log.String("addr", rootAddr))
 
 	if ttl != "" {
 		r.startHeartbeat(reg, ttl)
@@ -214,7 +319,11 @@ func (r *consulRegistry) startHeartbeat(reg *api.AgentServiceRegistration, ttl s
 	r.heartbeats[serviceID] = cancel
 	r.mu.Unlock()
 
-	go func() {
+	// SafeGo wraps the heartbeat loop with panic recovery (KeepRunning): a panic
+	// in a single TTL pass must not tear down the process — parity with the managed
+	// watch (runManagedUpdates) and RegisterAsync goroutines. Lifecycle is
+	// unchanged: ctx.Done() (cancel stored in r.heartbeats) still stops the loop.
+	obsruntime.SafeGo(r.logger, "libsd.ttl-heartbeat:"+serviceID, obsruntime.KeepRunning, func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -226,7 +335,7 @@ func (r *consulRegistry) startHeartbeat(reg *api.AgentServiceRegistration, ttl s
 				pass()
 			}
 		}
-	}()
+	})
 }
 
 func (r *consulRegistry) Deregister(ctx context.Context, serviceID string) error {
@@ -251,12 +360,36 @@ func (r *consulRegistry) Deregister(ctx context.Context, serviceID string) error
 	return nil
 }
 
+// Close stops every active TTL heartbeat goroutine started by Register, so a
+// consumer that forgets to Deregister does not leak them. It cancels each
+// tracked heartbeat context and drains the map, making it idempotent: a second
+// call finds an empty map and is a no-op. Nil-receiver safe.
+//
+// Close does NOT deregister services from Consul (a heartbeat simply stops, and
+// Consul reaps the instance after DeregisterCriticalServiceAfter); call
+// Deregister to remove an instance eagerly.
+func (r *consulRegistry) Close() error {
+	if r == nil {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for serviceID, cancel := range r.heartbeats {
+		cancel()
+		delete(r.heartbeats, serviceID)
+	}
+
+	return nil
+}
+
 func (r *consulRegistry) Resolve(ctx context.Context, name, tag string) (Service, error) {
 	if r == nil {
 		return Service{}, ErrNilRegistry
 	}
 
-	entries, _, err := r.client.Health().Service(name, tag, true, (&api.QueryOptions{}).WithContext(ctx))
+	entries, _, err := r.client.Health().Service(name, tag, true, r.queryOpts(ctx))
 	if err != nil {
 		return Service{}, fmt.Errorf("consul: resolve %s: %w", name, err)
 	}
@@ -302,10 +435,13 @@ func (r *consulRegistry) watchLoop(ctx context.Context, name string, ch chan<- E
 		default:
 		}
 
-		entries, meta, err := r.client.Health().Service(name, "", false, (&api.QueryOptions{
-			WaitIndex: lastIndex,
-			WaitTime:  watchWaitTime,
-		}).WithContext(ctx))
+		// Reads honor AllowStale via queryOpts; the watch client omits the
+		// response-header deadline so this blocking long-poll survives.
+		opts := r.queryOpts(ctx)
+		opts.WaitIndex = lastIndex
+		opts.WaitTime = watchWaitTime
+
+		entries, meta, err := r.watchClient.Health().Service(name, "", false, opts)
 		if err != nil {
 			// ctx cancelled mid-poll: exit quietly, no backoff/log needed.
 			if ctx.Err() != nil {
@@ -378,15 +514,69 @@ func eventTypeFor(e *api.ServiceEntry) EventType {
 // advertised scheme from Meta["scheme"]. Shared by Resolve and Watch so both
 // surface the same fields (including Scheme).
 func serviceFromEntry(e *api.ServiceEntry) Service {
-	return Service{
-		ID:      e.Service.ID,
-		Name:    e.Service.Service,
-		Address: e.Service.Address,
-		Port:    e.Service.Port,
-		Scheme:  e.Service.Meta["scheme"],
-		Tags:    e.Service.Tags,
-		Meta:    e.Service.Meta,
+	meta := e.Service.Meta
+
+	svc := Service{
+		ID:   e.Service.ID,
+		Name: e.Service.Service,
+		Tags: e.Service.Tags,
+		Meta: meta,
 	}
+
+	// Reconstruct the AUTHORITATIVE external endpoint. Three cases, distinguished so
+	// an internal-only provider is never handed a synthetic external endpoint:
+	//   - external_* keys present: the explicit external endpoint this build writes.
+	//   - no external_* AND no internal_* keys: a legacy v0.6.0 registration whose
+	//     entry Address/Port + Meta["scheme"] WAS the external ingress — reconstruct
+	//     it from the root so back-compat readers keep working.
+	//   - no external_* but internal_* present: a new internal-only provider; it
+	//     never advertised an external endpoint, so External stays nil.
+	// A nil Meta reads as zero values, so guarding on the string keys is enough.
+	switch {
+	case meta["external_address"] != "":
+		svc.External = &Endpoint{
+			Address: meta["external_address"],
+			Port:    atoiSafe(meta["external_port"]),
+			Scheme:  meta["external_scheme"],
+		}
+	case meta["internal_address"] == "":
+		svc.External = &Endpoint{
+			Address: e.Service.Address,
+			Port:    e.Service.Port,
+			Scheme:  meta["scheme"],
+		}
+	}
+
+	// Recover the in-cluster endpoint that Register serialized into Meta
+	// (internal_address/internal_port/internal_scheme). When absent/empty the
+	// provider never advertised an internal endpoint, so svc.Internal stays nil.
+	if meta["internal_address"] != "" {
+		svc.Internal = &Endpoint{
+			Address: meta["internal_address"],
+			Port:    atoiSafe(meta["internal_port"]),
+			Scheme:  meta["internal_scheme"],
+		}
+	}
+
+	// Mirror the root routable endpoint (External if set, else Internal) into the
+	// deprecated flat fields for legacy readers. This is a READ path, so mirror
+	// ONLY root -> flat (never promote flat -> External): an internal-only provider
+	// keeps External nil while its flat mirror stays routable.
+	svc.mirrorFlat()
+
+	return svc
+}
+
+// atoiSafe parses s as an int, returning 0 on any parse error. It is the
+// tolerant counterpart to serviceMeta's strconv.Itoa on the read side: a
+// malformed internal_port must never fail this pure mapping path.
+func atoiSafe(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+
+	return n
 }
 
 // nextIndex returns the next round-robin index for n healthy instances.
@@ -398,20 +588,52 @@ func (r *consulRegistry) nextIndex(n int) int {
 	return int(r.rr.Add(1)-1) % n
 }
 
-// metaWithScheme returns svc.Meta augmented with the "scheme" key, copying the
-// map first so the caller's Meta is never mutated. Returns svc.Meta unchanged
-// when no scheme is set.
-func metaWithScheme(svc Service) map[string]string {
-	if svc.Scheme == "" {
+// serviceMeta returns svc.Meta augmented with the derived registry keys: the
+// external endpoint under external_address/external_port/external_scheme (with
+// the "scheme" key retained as a mirror of the external scheme for back-compat),
+// and, when svc.Internal is set, the in-cluster endpoint under
+// internal_address/internal_port/internal_scheme.
+//
+// svc is normalized on this copy first (svc is passed by value), so a legacy
+// flat-only caller is promoted into External and the flat mirror agrees. The map
+// is copied before any write, so the caller's Meta is never mutated
+// (copy-on-write). Derived keys take precedence over caller-supplied keys of the
+// same name. Returns svc.Meta unchanged (nil stays nil) when there is nothing to
+// add — neither External nor Internal.
+func serviceMeta(svc Service) map[string]string {
+	svc.normalizeEndpoints()
+
+	if svc.External == nil && svc.Internal == nil {
 		return svc.Meta
 	}
 
-	meta := make(map[string]string, len(svc.Meta)+1)
+	// Room for scheme + the three external_* and three internal_* keys.
+	meta := make(map[string]string, len(svc.Meta)+7)
 	for k, v := range svc.Meta {
 		meta[k] = v
 	}
 
-	meta["scheme"] = svc.Scheme
+	if svc.External != nil {
+		meta["external_address"] = svc.External.Address
+		meta["external_port"] = strconv.Itoa(svc.External.Port)
+
+		if svc.External.Scheme != "" {
+			meta["external_scheme"] = svc.External.Scheme
+			// "scheme" mirrors the EXTERNAL scheme for back-compat with old readers;
+			// it is never derived from an internal-only root.
+			meta["scheme"] = svc.External.Scheme
+		}
+	}
+
+	if svc.Internal != nil {
+		meta["internal_address"] = svc.Internal.Address
+		meta["internal_port"] = strconv.Itoa(svc.Internal.Port)
+
+		// Symmetric with external_scheme: only write internal_scheme when non-empty.
+		if svc.Internal.Scheme != "" {
+			meta["internal_scheme"] = svc.Internal.Scheme
+		}
+	}
 
 	return meta
 }
