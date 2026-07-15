@@ -6,6 +6,24 @@
 #   curl http://localhost:8081/ping  # svc-a -> svc-b -> svc-c
 #   curl http://localhost:8081/whoami
 #   make down
+#
+# Dual-endpoint demo: svc-a and svc-b advertise BOTH an external endpoint
+# (SD_EXTERNAL_ADDRESS/SD_EXTERNAL_PORT) and an internal endpoint
+# (SD_INTERNAL_ADDRESS/SD_INTERNAL_PORT). Callers set SD_PREFER_VIEW=internal, so
+# ResolvePreferredEndpoint returns the internal endpoint end-to-end. On the
+# compose network the internal and external hostnames happen to be the same, so
+# this proves the wiring (Register serializes the endpoints to Consul Meta, the
+# resolver reconstructs and returns them) rather than being a no-op.
+# SD_INTERNAL_SCHEME is left unset, so Register defaults the internal endpoint to
+# "http" — correct for this plaintext demo.
+#
+# INTERNAL-ONLY leaf: svc-c advertises ONLY its internal endpoint
+# (SD_INTERNAL_ADDRESS/SD_INTERNAL_PORT) and omits SD_EXTERNAL_ADDRESS entirely,
+# so Service.External is nil. svc-b resolves it via the internal view
+# (SD_PREFER_VIEW=internal) and the chain still works. A ResolveEndpoint(External)
+# against svc-c would return ErrEndpointViewUnavailable — the external view is
+# genuinely unavailable, not degraded. Because svc-c sets no SD_ADVERTISE_PORT,
+# the demo binary derives its listen port from SD_INTERNAL_PORT (see main.go).
 services:
   consul:
     image: hashicorp/consul:1.19
@@ -27,8 +45,11 @@ services:
       NEXT: svc-b
       SD_ENABLED: "true"
       SD_ADDRESS: consul:8500
-      SD_ADVERTISE_ADDRESS: svc-a
-      SD_ADVERTISE_PORT: "8081"
+      SD_EXTERNAL_ADDRESS: svc-a
+      SD_EXTERNAL_PORT: "8081"
+      SD_INTERNAL_ADDRESS: svc-a
+      SD_INTERNAL_PORT: "8081"
+      SD_PREFER_VIEW: internal
     ports:
       - "8081:8081"
     depends_on:
@@ -44,8 +65,11 @@ services:
       NEXT: svc-c
       SD_ENABLED: "true"
       SD_ADDRESS: consul:8500
-      SD_ADVERTISE_ADDRESS: svc-b
-      SD_ADVERTISE_PORT: "8082"
+      SD_EXTERNAL_ADDRESS: svc-b
+      SD_EXTERNAL_PORT: "8082"
+      SD_INTERNAL_ADDRESS: svc-b
+      SD_INTERNAL_PORT: "8082"
+      SD_PREFER_VIEW: internal
     ports:
       - "8082:8082"
     depends_on:
@@ -60,8 +84,14 @@ services:
       SERVICE_NAME: svc-c
       SD_ENABLED: "true"
       SD_ADDRESS: consul:8500
-      SD_ADVERTISE_ADDRESS: svc-c
-      SD_ADVERTISE_PORT: "8083"
+      # INTERNAL-ONLY leaf: only the internal endpoint is advertised —
+      # SD_EXTERNAL_ADDRESS is intentionally omitted, so Service.External is nil
+      # and ResolveEndpoint(External) against svc-c returns
+      # ErrEndpointViewUnavailable. svc-b resolves it via the internal view.
+      # No NEXT, so no SD_PREFER_VIEW needed here. No SD_ADVERTISE_PORT either, so
+      # the binary derives its listen port from SD_INTERNAL_PORT (see main.go).
+      SD_INTERNAL_ADDRESS: svc-c
+      SD_INTERNAL_PORT: "8083"
     ports:
       - "8083:8083"
     depends_on:

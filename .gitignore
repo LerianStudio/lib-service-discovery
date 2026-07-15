@@ -29,4 +29,5 @@ go.work.sum
 scripts/node_modules
 .windsurf
 coverage.html
+coverage.out
 artifacts/

@@ -105,6 +105,38 @@ func TestRegisterAsync_NilManagerDoesNotPanic(t *testing.T) {
 	m.RegisterAsync(context.Background(), Service{Name: "svc"})
 }
 
+// TestRegisterAsync_StopsOnManagerClose proves #15(a): the retry loop honors the
+// Manager-lifetime baseCtx, so Manager.Close stops a pending retry even when the
+// caller ctx (here context.Background) never cancels. Otherwise a retry could land
+// AFTER Close and register (plus start a heartbeat) that escapes Close's cleanup.
+//
+// Against the pre-fix code (loop tied only to the caller ctx) Close does not stop
+// the loop, so Register keeps being called and the count keeps growing → fails.
+func TestRegisterAsync_StopsOnManagerClose(t *testing.T) {
+	t.Parallel()
+
+	// Always fails: only Manager.Close can end the loop (the caller ctx is Background).
+	reg := &flakyRegistry{failsLeft: 1 << 30, done: make(chan struct{})}
+	m := enabledManager(t, reg)
+
+	m.RegisterAsync(context.Background(), Service{ID: "svc-1", Name: "svc", Port: 8080})
+
+	// Let it attempt at least once, then close the Manager.
+	time.Sleep(50 * time.Millisecond)
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// After Close the loop must stop; the call count stabilizes.
+	time.Sleep(150 * time.Millisecond)
+	first := reg.callCount()
+	time.Sleep(300 * time.Millisecond)
+
+	if got := reg.callCount(); got != first {
+		t.Fatalf("Register kept being called after Manager.Close: %d -> %d", first, got)
+	}
+}
+
 func TestRegisterAsync_StopsOnContextCancel(t *testing.T) {
 	t.Parallel()
 
