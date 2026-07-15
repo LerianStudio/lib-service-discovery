@@ -13,6 +13,23 @@ Service discovery library (`lib-service-discovery`) backed by HashiCorp Consul, 
 go get github.com/LerianStudio/lib-service-discovery
 ```
 
+## Breaking changes (v1.0.0)
+
+`v1.0.0` is the first stable release. It carries the dual-endpoint / managed
+watch-and-cache redesign and is **not source-compatible** with `v0.6.x`:
+
+- `Service.EndpointFor(view)` now returns `(Endpoint, error)` — an `External`
+  view against an internal-only service returns `ErrEndpointViewUnavailable`.
+- `Config.Validate` no longer requires an advertise address when discovery is
+  enabled (consumer-only Managers are valid); the "at least one endpoint"
+  requirement (`ErrNoEndpoint`) moved to `Register`.
+- `Config.AllowStale` changed from `bool` to `*bool` (nil defaults to `true`).
+- Removed the never-released `WithResolveCache` option and `Config.ResolveTimeout`
+  knob — one-shot `Resolve`/`ResolveEndpoint` are now backed by a managed
+  watch-and-cache resolver (Consul stays off the request path).
+- `Service.Address`/`Port`/`Scheme` are **deprecated** (root-routable mirror);
+  use `Service.External` / `Service.Internal`.
+
 ## What is in this library
 
 ### `lib-service-discovery`
