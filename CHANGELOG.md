@@ -1,5 +1,26 @@
 # Lib-service-discovery Changelog
 
+## [1.0.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v1.0.0)
+
+Features:
+- Finalize the `v1.0.0` API, documenting consumer-only in the package overview. (@guimoreirar)
+- Release the first stable version with dual-endpoint support, managed watch-and-cache, and fail-open capabilities. (@guimoreirar)
+- Enable a consumer-only Manager where advertising is required only for registration. (@guimoreirar)
+- Implement dynamic service discovery with caching and error handling. (@guimoreirar)
+
+Fixes:
+- Surface `ErrNoHealthyInstances` after an authoritative empty clear. (@guimoreirar)
+- Address CodeRabbit review findings on the dual DNS feature. (@guimoreirar)
+- Update `firstEnvDuration` to return zero instead of a fallback and clean up context handling in resolver methods. (@guimoreirar)
+
+Improvements:
+- Expand the pull request type checklist with conventional types. (@guimoreirar)
+- Make the consumer-only README example copy-safe. (@guimoreirar)
+
+[Compare changes](https://github.com/LerianStudio/lib-service-discovery/compare/v0.6.0...v1.0.0)
+
+---
+
 ## [0.6.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v0.6.0)
 
 Features:
