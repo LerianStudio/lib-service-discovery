@@ -24,10 +24,19 @@ type DynamicResolver struct {
 	// view selects which advertised endpoint to track (External or Internal). The
 	// zero value "" is treated as External at the point of use (EndpointFor maps
 	// unknown → external).
-	view          EndpointView
-	current       atomic.Value // string — host:port
-	currentScheme atomic.Value // string — URL scheme ("https"/"http"/"")
-	cancel        context.CancelFunc
+	view EndpointView
+	// snapshot holds the current {address, scheme} as ONE immutable value, so a
+	// reader can never observe a torn pair (a new address with a stale scheme).
+	// Written atomically by the seed and every update; read by Address()/Scheme().
+	snapshot atomic.Pointer[resolverSnapshot]
+	cancel   context.CancelFunc
+}
+
+// resolverSnapshot is the immutable address+scheme pair a DynamicResolver stores
+// atomically, so Address() and Scheme() always read a consistent view.
+type resolverSnapshot struct {
+	address string
+	scheme  string
 }
 
 // ResolverOption configures a DynamicResolver at construction time.
@@ -53,8 +62,8 @@ func (d *DynamicResolver) Address() string {
 		return ""
 	}
 
-	if v, ok := d.current.Load().(string); ok {
-		return v
+	if s := d.snapshot.Load(); s != nil {
+		return s.address
 	}
 
 	return d.fallback
@@ -68,11 +77,17 @@ func (d *DynamicResolver) Scheme() string {
 		return ""
 	}
 
-	if v, ok := d.currentScheme.Load().(string); ok {
-		return v
+	if s := d.snapshot.Load(); s != nil {
+		return s.scheme
 	}
 
 	return d.fallbackScheme
+}
+
+// store atomically records the current address+scheme as one immutable snapshot,
+// so Address() and Scheme() never observe a torn pair.
+func (d *DynamicResolver) store(address, scheme string) {
+	d.snapshot.Store(&resolverSnapshot{address: address, scheme: scheme})
 }
 
 // Stop ends the background watch and releases its resources.
@@ -125,7 +140,7 @@ func (m *Manager) WatchResolve(ctx context.Context, name, fallback string, opts 
 			return nil, err
 		}
 
-		dr.current.Store(addr)
+		dr.store(addr, "")
 
 		return m.startResolverWatch(ctx, dr, name)
 	}
@@ -143,14 +158,14 @@ func (m *Manager) WatchResolve(ctx context.Context, name, fallback string, opts 
 	cancel() // release the seed deadline immediately; the watch uses ctx, not seedCtx.
 
 	if err != nil {
-		dr.current.Store(fallback)
+		dr.store(fallback, "")
 		m.logger.Log(ctx, log.LevelWarn, "dynamic resolver seed degraded; starting watch anyway",
 			log.String("service", name),
 			log.String("view", string(dr.view)),
 			log.String("fallback", fallback),
 			log.Err(err))
 	} else {
-		dr.current.Store(addr)
+		dr.store(addr, "")
 	}
 
 	return m.startResolverWatch(ctx, dr, name)
@@ -201,8 +216,7 @@ func (m *Manager) WatchResolveService(ctx context.Context, name string, fallback
 			return nil, err
 		}
 
-		dr.current.Store(addr)
-		dr.currentScheme.Store(scheme)
+		dr.store(addr, scheme)
 
 		return m.startResolverWatch(ctx, dr, name)
 	}
@@ -219,16 +233,14 @@ func (m *Manager) WatchResolveService(ctx context.Context, name string, fallback
 	cancel() // release the seed deadline immediately; the watch uses ctx, not seedCtx.
 
 	if err != nil {
-		dr.current.Store(dr.fallback)
-		dr.currentScheme.Store(dr.fallbackScheme)
+		dr.store(dr.fallback, dr.fallbackScheme)
 		m.logger.Log(ctx, log.LevelWarn, "dynamic resolver seed degraded; starting watch anyway",
 			log.String("service", name),
 			log.String("view", string(dr.view)),
 			log.String("fallback", dr.fallback),
 			log.Err(err))
 	} else {
-		dr.current.Store(addr)
-		dr.currentScheme.Store(scheme)
+		dr.store(addr, scheme)
 	}
 
 	return m.startResolverWatch(ctx, dr, name)
@@ -424,8 +436,7 @@ func (m *Manager) runResolverUpdates(ctx context.Context, dr *DynamicResolver, c
 			switch {
 			case dr.fallback != "":
 				// Fallback is an already-resolved host:port — view-independent, not re-mapped.
-				dr.current.Store(dr.fallback)
-				dr.currentScheme.Store(dr.fallbackScheme)
+				dr.store(dr.fallback, dr.fallbackScheme)
 				m.logger.Log(ctx, log.LevelWarn, "dynamic resolve fell back",
 					log.String("service", name),
 					log.String("fallback", dr.fallback),
@@ -460,8 +471,7 @@ func (m *Manager) runResolverUpdates(ctx context.Context, dr *DynamicResolver, c
 				log.String("view", string(dr.view)))
 		}
 
-		dr.current.Store(ep.Addr())
-		dr.currentScheme.Store(ep.Scheme)
+		dr.store(ep.Addr(), ep.Scheme)
 		m.logger.Log(ctx, log.LevelDebug, "dynamic resolve updated",
 			log.String("service", name),
 			log.String("addr", ep.Addr()),

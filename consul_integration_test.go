@@ -149,6 +149,11 @@ func TestIntegration_Deregister(t *testing.T) {
 	// assert against a fresh manager. Eventually absorbs any catalog propagation lag.
 	require.Eventually(t, func() bool {
 		fresh := integrationManager(t)
+		// Close the fresh manager inside the attempt so its managed-resolver watch
+		// goroutines do not accumulate across the (potentially many) Eventually
+		// iterations. Close is idempotent, so integrationManager's t.Cleanup Close is
+		// still safe.
+		defer func() { _ = fresh.Close() }()
 
 		_, err := fresh.Resolve(ctx, svc.Name, "")
 

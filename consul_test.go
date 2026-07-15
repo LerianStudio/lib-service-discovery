@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LerianStudio/lib-observability/log"
 	"github.com/hashicorp/consul/api"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func healthEntry(id, name, addr string, port int, scheme string) *api.ServiceEntry {
@@ -416,6 +418,35 @@ func TestServiceMeta_InternalOnlyNoExternalKeys(t *testing.T) {
 
 	_, hasExtAddr := got["external_address"]
 	assert.False(t, hasExtAddr, "internal-only -> no external_address key")
+}
+
+// ── startHeartbeat after Close (#15: no heartbeat survives shutdown) ─────────────
+
+// TestConsulRegistryStartHeartbeat_NoopAfterClose proves #15(b): once Close has
+// run, startHeartbeat refuses to insert a new heartbeat, so a Register that raced
+// shutdown (e.g. a pending RegisterAsync retry) cannot resurrect a background
+// goroutine that escapes Close's cleanup. Because the closed guard returns before
+// pass() (which would deref the nil client), the no-op is observable without a
+// live Consul.
+func TestConsulRegistryStartHeartbeat_NoopAfterClose(t *testing.T) {
+	t.Parallel()
+
+	r := &consulRegistry{
+		logger:     log.NewNop(),
+		heartbeats: map[string]context.CancelFunc{},
+	}
+
+	require.NoError(t, r.Close())
+
+	// A heartbeat inserted after Close must be refused: no goroutine, empty map, no
+	// panic from touching the (nil) client.
+	assert.NotPanics(t, func() {
+		r.startHeartbeat(&api.AgentServiceRegistration{ID: "svc-late"}, "30s")
+	})
+
+	r.mu.Lock()
+	assert.Empty(t, r.heartbeats, "startHeartbeat must be a no-op after Close")
+	r.mu.Unlock()
 }
 
 // ── atoiSafe (tolerant parse: 0 on error, never panics) ──────────────────────────

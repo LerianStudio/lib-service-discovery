@@ -85,6 +85,7 @@
 //	if err != nil {
 //	    return err
 //	}
+//	defer sd.Close() // stop background watchers + TTL heartbeats on shutdown
 //
 //	// Register this service
 //	if err := sd.Register(ctx, libsd.Service{

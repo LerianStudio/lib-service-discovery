@@ -65,19 +65,22 @@ func dualService(name string) Service {
 	}
 }
 
-// freePort reserves and immediately releases a TCP port, returning a port number
-// with (almost certainly) nothing listening on it. Used by the negative
-// health-check case to prove the check targets the internal endpoint.
-func freePort(t *testing.T) int {
+// heldDeadPort binds a TCP listener on a free port and KEEPS it open (closed only
+// at test end), returning the port. Holding the listener is deliberate: if we
+// released the port (the old freePort behavior) the OS could reuse it for another
+// test's health server between release and the Consul probe, making the "dead"
+// endpoint accidentally serve 200 and flaking the negative case. Nothing ever
+// calls Accept, so an HTTP health check against it connects but never receives a
+// response → the check stays critical, exactly as the negative case requires.
+func heldDeadPort(t *testing.T) int {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	require.NoError(t, err)
 
-	port := ln.Addr().(*net.TCPAddr).Port
-	require.NoError(t, ln.Close())
+	t.Cleanup(func() { _ = ln.Close() })
 
-	return port
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 // TestIntegration_DualEndpoint_RegisterSerializesInternalMeta verifies that
@@ -234,8 +237,9 @@ func TestIntegration_DualEndpoint_HealthCheckTargetsInternal(t *testing.T) {
 
 	t.Run("internal unreachable never becomes healthy", func(t *testing.T) {
 		// No server is started on this port, so the health check (which targets the
-		// internal endpoint) can never pass.
-		deadPort := freePort(t)
+		// internal endpoint) can never pass. The listener is held open for the test's
+		// lifetime so the OS cannot reuse the port for a real health server.
+		deadPort := heldDeadPort(t)
 		m := integrationManagerDual(t, deadPort, External)
 
 		svc := dualService(fmt.Sprintf("dual-hc-dead-%d", deadPort))

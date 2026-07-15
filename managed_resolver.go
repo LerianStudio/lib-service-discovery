@@ -2,6 +2,7 @@ package libsd
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -55,6 +56,16 @@ type managedResolver struct {
 func (mr *managedResolver) store(svc Service) {
 	mr.current.Store(svc)
 	mr.seeded.Store(true)
+}
+
+// clear marks the resolver un-seeded, so service() reports no cached value and the
+// request path degrades to fallback/error. It is the authoritative-empty-catalog
+// counterpart of store: current is left untouched (never read once seeded is
+// false). Called only from the watch goroutine, so it never races store (same
+// single writer); seedErr is deliberately not touched (its once/atomic
+// happens-before is owned by the seed path).
+func (mr *managedResolver) clear() {
+	mr.seeded.Store(false)
 }
 
 // service returns the cached Service and whether one is present.
@@ -217,8 +228,22 @@ func (m *Manager) runManagedUpdates(ctx context.Context, mr *managedResolver, ch
 
 		svc, err := m.registry.Resolve(ctx, name, tag)
 		if err != nil {
-			// Keep the last-known-good value; a transient registry failure must not
-			// blank a route consumers are still using.
+			if errors.Is(err, ErrNoHealthyInstances) {
+				// AUTHORITATIVE empty catalog (Consul up, zero healthy) — not a
+				// transient outage. Clear the cache so the request path stops routing
+				// to a now-dead instance and instead falls back (or errors) until the
+				// watch recovers a live value; keeping last-known-good here would route
+				// to a dead endpoint indefinitely.
+				mr.clear()
+				m.logger.Log(ctx, log.LevelWarn, "managed resolve found no healthy instances; clearing cache",
+					log.String("service", name),
+					log.Err(err))
+
+				continue
+			}
+
+			// Transient registry failure: keep the last-known-good value so a blip
+			// does not blank a route consumers are still using.
 			m.logger.Log(ctx, log.LevelWarn, "managed resolve update failed; keeping last value",
 				log.String("service", name),
 				log.Err(err))

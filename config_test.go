@@ -331,22 +331,82 @@ func TestSplitSchemeHost(t *testing.T) {
 		addr       string
 		wantScheme string
 		wantHost   string
+		wantPort   string
 	}{
-		{name: "empty", addr: "", wantScheme: "", wantHost: ""},
-		{name: "bare hostname", addr: "fees.example.net", wantScheme: "", wantHost: "fees.example.net"},
-		{name: "https url", addr: "https://fees.example.net", wantScheme: "https", wantHost: "fees.example.net"},
-		{name: "http cluster dns", addr: "http://svc.ns.svc.cluster.local", wantScheme: "http", wantHost: "svc.ns.svc.cluster.local"},
-		{name: "malformed returns addr unchanged", addr: "://bad", wantScheme: "", wantHost: "://bad"},
+		{name: "empty", addr: "", wantScheme: "", wantHost: "", wantPort: ""},
+		{name: "bare hostname", addr: "fees.example.net", wantScheme: "", wantHost: "fees.example.net", wantPort: ""},
+		{name: "https url", addr: "https://fees.example.net", wantScheme: "https", wantHost: "fees.example.net", wantPort: ""},
+		{name: "https url with port", addr: "https://svc:8443", wantScheme: "https", wantHost: "svc", wantPort: "8443"},
+		{name: "http cluster dns", addr: "http://svc.ns.svc.cluster.local", wantScheme: "http", wantHost: "svc.ns.svc.cluster.local", wantPort: ""},
+		{name: "malformed returns addr unchanged", addr: "://bad", wantScheme: "", wantHost: "://bad", wantPort: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			scheme, host := splitSchemeHost(tt.addr)
+			scheme, host, port := splitSchemeHost(tt.addr)
 
 			assert.Equal(t, tt.wantScheme, scheme)
 			assert.Equal(t, tt.wantHost, host)
+			assert.Equal(t, tt.wantPort, port)
 		})
 	}
+}
+
+// TestParseAdvertiseAddrs_URLPortPreserved covers #5: a URL that carries a port
+// preserves it when no explicit port is configured, and an explicit port always
+// wins over the URL port. Pure (no env), so it runs fully parallel.
+func TestParseAdvertiseAddrs_URLPortPreserved(t *testing.T) {
+	t.Parallel()
+
+	t.Run("external url port preserved when AdvertisePort unset", func(t *testing.T) {
+		t.Parallel()
+
+		c := Config{AdvertiseAddr: "https://svc:8443"}.parseAdvertiseAddrs()
+
+		assert.Equal(t, "svc", c.AdvertiseAddr)
+		assert.Equal(t, "https", c.AdvertiseScheme)
+		assert.Equal(t, 8443, c.AdvertisePort, "URL port must be preserved when no explicit port is set")
+	})
+
+	t.Run("explicit external port wins over url port", func(t *testing.T) {
+		t.Parallel()
+
+		c := Config{AdvertiseAddr: "https://svc:8443", AdvertisePort: 9000}.parseAdvertiseAddrs()
+
+		assert.Equal(t, 9000, c.AdvertisePort, "explicit AdvertisePort must win over the URL port")
+	})
+
+	t.Run("internal url port preserved when AdvertiseInternalPort unset", func(t *testing.T) {
+		t.Parallel()
+
+		c := Config{AdvertiseInternalAddr: "http://svc.ns.svc.cluster.local:9090"}.parseAdvertiseAddrs()
+
+		assert.Equal(t, "svc.ns.svc.cluster.local", c.AdvertiseInternalAddr)
+		assert.Equal(t, "http", c.AdvertiseInternalScheme)
+		assert.Equal(t, 9090, c.AdvertiseInternalPort, "internal URL port must be preserved when no explicit port is set")
+	})
+
+	t.Run("explicit internal port wins over url port", func(t *testing.T) {
+		t.Parallel()
+
+		c := Config{AdvertiseInternalAddr: "http://svc:9090", AdvertiseInternalPort: 1234}.parseAdvertiseAddrs()
+
+		assert.Equal(t, 1234, c.AdvertiseInternalPort, "explicit AdvertiseInternalPort must win over the URL port")
+	})
+}
+
+// TestConfigFromEnv_URLPortWithoutExplicitPort covers #5 at the env layer:
+// SD_ADVERTISE_ADDRESS=https://svc:8443 with no SD_ADVERTISE_PORT preserves 8443.
+func TestConfigFromEnv_URLPortWithoutExplicitPort(t *testing.T) {
+	t.Setenv("SD_ADVERTISE_ADDRESS", "https://svc:8443")
+	t.Setenv("SD_ADVERTISE_PORT", "")
+	t.Setenv("SD_EXTERNAL_PORT", "")
+
+	c := ConfigFromEnv()
+
+	assert.Equal(t, "svc", c.AdvertiseAddr)
+	assert.Equal(t, "https", c.AdvertiseScheme)
+	assert.Equal(t, 8443, c.AdvertisePort)
 }

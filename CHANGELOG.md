@@ -75,7 +75,7 @@ Improvements:
   Kubernetes Service DNS name (which distributes across ready pods; an ingress
   handles the external path), not to an individual pod. The internal refresh cursor
   still selects the instance at seed/refresh time. `AllowStale` (`SD_ALLOW_STALE`,
-  default `true`) is retained and unchanged.
+  default `true`) preserves the stale-read semantics described above.
 
 ### Changed
 - **`AllowStale` now defaults to `true`** (stale reads). The field type changed

@@ -310,17 +310,35 @@ func ttlWithDefaults(raw string) (string, error) {
 // field only when it is currently empty, and the addr is replaced with the bare
 // hostname only when parsing succeeded (i.e. a scheme was present).
 func (c Config) parseAdvertiseAddrs() Config {
-	if scheme, host := splitSchemeHost(c.AdvertiseAddr); scheme != "" {
+	if scheme, host, port := splitSchemeHost(c.AdvertiseAddr); scheme != "" {
 		if c.AdvertiseScheme == "" {
 			c.AdvertiseScheme = scheme
+		}
+
+		// The port embedded in the URL ("https://svc:8443" -> 8443) seeds the port
+		// only when no explicit AdvertisePort was supplied — an explicit env/config
+		// port always wins. Without this the URL port would be silently dropped and
+		// Register would fall back to its own port.
+		if c.AdvertisePort == 0 {
+			if p, err := strconv.Atoi(port); err == nil {
+				c.AdvertisePort = p
+			}
 		}
 
 		c.AdvertiseAddr = host
 	}
 
-	if scheme, host := splitSchemeHost(c.AdvertiseInternalAddr); scheme != "" {
+	if scheme, host, port := splitSchemeHost(c.AdvertiseInternalAddr); scheme != "" {
 		if c.AdvertiseInternalScheme == "" {
 			c.AdvertiseInternalScheme = scheme
+		}
+
+		// Same precedence as the external endpoint: an explicit AdvertiseInternalPort
+		// wins; otherwise the URL's port is preserved instead of dropped.
+		if c.AdvertiseInternalPort == 0 {
+			if p, err := strconv.Atoi(port); err == nil {
+				c.AdvertiseInternalPort = p
+			}
 		}
 
 		c.AdvertiseInternalAddr = host
@@ -329,20 +347,21 @@ func (c Config) parseAdvertiseAddrs() Config {
 	return c
 }
 
-// splitSchemeHost splits addr into its URL scheme and bare hostname. When addr
-// is empty, cannot be parsed, or carries no scheme/host, it returns ("", addr)
-// so the caller leaves the original value untouched.
-func splitSchemeHost(addr string) (scheme, host string) {
+// splitSchemeHost splits addr into its URL scheme, bare hostname, and port. When
+// addr is empty, cannot be parsed, or carries no scheme/host, it returns
+// ("", addr, "") so the caller leaves the original value untouched. The port is
+// the URL's port when present ("https://svc:8443" -> "8443"), else "".
+func splitSchemeHost(addr string) (scheme, host, port string) {
 	if addr == "" {
-		return "", addr
+		return "", addr, ""
 	}
 
 	u, err := url.Parse(addr)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "", addr
+		return "", addr, ""
 	}
 
-	return u.Scheme, u.Hostname()
+	return u.Scheme, u.Hostname(), u.Port()
 }
 
 // parsePreferView normalizes a raw SD_PREFER_VIEW value into an EndpointView.

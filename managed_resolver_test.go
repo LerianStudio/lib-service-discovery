@@ -5,6 +5,7 @@ package libsd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -187,7 +188,19 @@ func TestManagedResolver_CloseDuringInFlightSeedDoesNotLeak(t *testing.T) {
 	// context, so runManagedUpdates must return immediately — no leak.
 	close(reg.release)
 
-	wg.Wait()
+	// Bound the wait so a regression that wedges the resolve goroutine fails the
+	// test instead of hanging CI forever.
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolve goroutine did not return within 5s after seed release")
+	}
 
 	// <=baseline (not ==): a leaked watcher is a persistent +1 that never satisfies
 	// this, so Eventually fails and catches the leak; transient drainers converge.
@@ -349,6 +362,15 @@ func TestManagedResolver_KeepsLastKnownGoodOnWatchFailure(t *testing.T) {
 	reg.set(Service{}, errors.New("consul down"))
 	reg.watchCh <- Event{Type: EventDeregistered}
 
+	// Prove the failed update was actually PROCESSED (the watch consumed the event
+	// and re-resolved) before asserting the cache is unchanged — otherwise "value
+	// unchanged" could just mean the event was never handled. resolveCount goes to
+	// 2 = seed (1) + the failed watch update (1); request-path Resolve reads the
+	// cache and does not touch the registry, so it never bumps the count.
+	require.Eventually(t, func() bool {
+		return reg.resolveCount() >= 2
+	}, time.Second, 10*time.Millisecond, "watch must consume the catalog event and re-resolve")
+
 	// The cached (last-known-good) value must never change to empty/error.
 	require.Never(t, func() bool {
 		got, rErr := m.Resolve(context.Background(), "svc-a", "")
@@ -356,6 +378,100 @@ func TestManagedResolver_KeepsLastKnownGoodOnWatchFailure(t *testing.T) {
 		return rErr != nil || got != "10.0.0.1:9000"
 	}, 300*time.Millisecond, 20*time.Millisecond,
 		"a failed watch update must keep the last-known-good value")
+}
+
+// TestManagedResolver_NoHealthyInstancesClearsCache proves #13: an AUTHORITATIVE
+// empty catalog delivered by the watch (Consul up, zero healthy — surfaced as
+// ErrNoHealthyInstances) CLEARS the cache, so a subsequent Resolve falls back
+// instead of routing to a now-dead last-known-good instance indefinitely.
+//
+// Against the pre-fix code (which kept last-known-good on ANY watch error) the
+// cache never clears, so the fallback is never served and this fails.
+func TestManagedResolver_NoHealthyInstancesClearsCache(t *testing.T) {
+	t.Parallel()
+
+	reg := &countingRegistry{
+		svc:     managedService("10.0.0.1", 9000, "https"),
+		watchCh: make(chan Event, 1),
+	}
+	m := enabledManager(t, reg)
+
+	// Seed a good value.
+	addr, err := m.Resolve(context.Background(), "svc-a", "fb:1")
+	require.NoError(t, err)
+	require.Equal(t, "10.0.0.1:9000", addr)
+
+	// The catalog goes authoritatively empty (Consul up, 0 healthy).
+	reg.set(Service{}, fmt.Errorf("%w: svc-a", ErrNoHealthyInstances))
+	reg.watchCh <- Event{Type: EventDeregistered}
+
+	// Once the update processes, the cache is cleared and Resolve serves the
+	// fallback (it no longer returns the dead last-known-good instance).
+	require.Eventually(t, func() bool {
+		got, rErr := m.Resolve(context.Background(), "svc-a", "fb:1")
+
+		return rErr == nil && got == "fb:1"
+	}, time.Second, 10*time.Millisecond,
+		"ErrNoHealthyInstances from the watch must clear the cache so Resolve falls back")
+}
+
+// TestManagedResolver_NoHealthyInstancesClearedNoFallbackErrors is the no-fallback
+// companion of #13: after the cache is cleared, a Resolve without a fallback
+// surfaces ErrNoHealthyInstances rather than the stale last-known-good address.
+func TestManagedResolver_NoHealthyInstancesClearedNoFallbackErrors(t *testing.T) {
+	t.Parallel()
+
+	reg := &countingRegistry{
+		svc:     managedService("10.0.0.1", 9000, "https"),
+		watchCh: make(chan Event, 1),
+	}
+	m := enabledManager(t, reg)
+
+	_, err := m.Resolve(context.Background(), "svc-a", "")
+	require.NoError(t, err)
+
+	reg.set(Service{}, fmt.Errorf("%w: svc-a", ErrNoHealthyInstances))
+	reg.watchCh <- Event{Type: EventDeregistered}
+
+	require.Eventually(t, func() bool {
+		_, rErr := m.Resolve(context.Background(), "svc-a", "")
+
+		return errors.Is(rErr, ErrNoHealthyInstances)
+	}, time.Second, 10*time.Millisecond,
+		"a cleared cache with no fallback must surface ErrNoHealthyInstances")
+}
+
+// TestManagedResolver_TransientErrorKeepsCache is the negative of #13: a TRANSIENT
+// watch error (anything other than ErrNoHealthyInstances) must NOT clear the
+// cache — the last-known-good value keeps serving a route consumers are using.
+func TestManagedResolver_TransientErrorKeepsCache(t *testing.T) {
+	t.Parallel()
+
+	reg := &countingRegistry{
+		svc:     managedService("10.0.0.1", 9000, "https"),
+		watchCh: make(chan Event, 1),
+	}
+	m := enabledManager(t, reg)
+
+	_, err := m.Resolve(context.Background(), "svc-a", "fb:1")
+	require.NoError(t, err)
+
+	// A transient failure (not ErrNoHealthyInstances) drives a failed update.
+	reg.set(Service{}, errors.New("consul unreachable"))
+	reg.watchCh <- Event{Type: EventDeregistered}
+
+	// Ensure the update was processed (seed + update = 2 registry resolves).
+	require.Eventually(t, func() bool {
+		return reg.resolveCount() >= 2
+	}, time.Second, 10*time.Millisecond, "watch must consume the catalog event and re-resolve")
+
+	// The cache must keep last-known-good — never fall back on a transient error.
+	require.Never(t, func() bool {
+		got, rErr := m.Resolve(context.Background(), "svc-a", "fb:1")
+
+		return rErr != nil || got != "10.0.0.1:9000"
+	}, 300*time.Millisecond, 20*time.Millisecond,
+		"a transient watch error must keep the last-known-good value")
 }
 
 // TestManagedResolver_CloseStopsWatchers proves Manager.Close cancels the managed

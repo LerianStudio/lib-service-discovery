@@ -60,6 +60,12 @@ type Manager struct {
 	// leaks). Created in New before the enabled check, so Close is always safe.
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
+	// closeOnce guards the shutdown path so the whole teardown (including the
+	// registry's Close) runs exactly once; closeErr retains its result so repeated
+	// Close calls return the same error without re-invoking a possibly
+	// non-idempotent custom registry closer.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Option configures a Manager after construction.
@@ -182,6 +188,12 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 	svc.Address = ""
 	svc.Port = 0
 	svc.Scheme = ""
+	// Also drop the caller's endpoint pointers: the library derives External and
+	// Internal SOLELY from config below. Otherwise a caller-supplied External could
+	// survive an internal-only config and publish an unauthorized external endpoint
+	// (and vice versa).
+	svc.External = nil
+	svc.Internal = nil
 
 	// The external port is the advertised override when set, else the caller's
 	// Register port. It also feeds the internal-port default below.
@@ -290,6 +302,13 @@ func (m *Manager) RegisterAsync(ctx context.Context, svc Service) {
 	// nil deref inside a custom Registry) crash the whole service.
 	obsruntime.SafeGo(m.logger, "libsd.register-async:"+svc.Name, obsruntime.KeepRunning, func() {
 		for attempt := 0; ; attempt++ {
+			// Stop immediately when the Manager closes, even if the caller ctx is
+			// still live: a retry that lands after Close would register (and, on the
+			// Consul backend, start a heartbeat) that escapes Close's cleanup.
+			if m.baseCtx.Err() != nil {
+				return
+			}
+
 			err := m.Register(ctx, svc)
 			if err == nil {
 				if attempt > 0 {
@@ -306,7 +325,9 @@ func (m *Manager) RegisterAsync(ctx context.Context, svc Service) {
 				log.Int("attempt", attempt),
 				log.Err(err))
 
-			if !sleepCtx(ctx, backoffDuration(attempt)) {
+			// Wake on the caller ctx OR the Manager-lifetime baseCtx, so Close aborts
+			// a pending backoff at once.
+			if !sleepCtxAny(ctx, m.baseCtx, backoffDuration(attempt)) {
 				return
 			}
 		}
@@ -579,6 +600,18 @@ func (m *Manager) Close() error {
 		return nil
 	}
 
+	// Run the teardown exactly once and retain its result, so a repeated Close
+	// never re-invokes a non-idempotent custom registry closer and every caller
+	// observes the same error.
+	m.closeOnce.Do(func() {
+		m.closeErr = m.doClose()
+	})
+
+	return m.closeErr
+}
+
+// doClose performs the one-time Manager teardown behind Close's sync.Once.
+func (m *Manager) doClose() error {
 	// Mark closed and cancel the base context BEFORE draining, all under the same
 	// lock, so a first-resolve running concurrently either (a) sees closed and never
 	// creates a watcher, or (b) already created one whose watch derives from the now

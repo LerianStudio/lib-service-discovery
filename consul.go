@@ -16,6 +16,16 @@ import (
 	"github.com/hashicorp/consul/api"
 )
 
+// reservedMetaKeys are the Meta keys serviceMeta derives authoritatively from the
+// Service's endpoints. Any caller-supplied copy is stripped before the derived
+// values are written, so a stale reserved key can never reconstruct a phantom
+// endpoint on the read path (serviceFromEntry).
+var reservedMetaKeys = []string{
+	"scheme",
+	"external_address", "external_port", "external_scheme",
+	"internal_address", "internal_port", "internal_scheme",
+}
+
 const (
 	// ttlHeartbeatFloor is the minimum interval between TTL heartbeats, so a very
 	// small TTL never busy-loops the heartbeat goroutine.
@@ -25,6 +35,14 @@ const (
 	// returning. Cancellation is driven by ctx (WithContext), so this only bounds
 	// the long-poll itself.
 	watchWaitTime = 5 * time.Minute
+
+	// watchPollMargin is the safety headroom added on top of watchWaitTime for the
+	// per-poll client-side deadline. A healthy blocking query returns at or before
+	// watchWaitTime, so this ceiling never truncates it; it only bounds a poll whose
+	// connection wedged (server-side WaitTime alone cannot rescue a stuck socket),
+	// so a hung connection surfaces as an error, backs off, and retries instead of
+	// freezing the watcher forever.
+	watchPollMargin = 15 * time.Second
 
 	// watchBackoffBase/Max bound the exponential backoff applied between failed
 	// catalog polls, so a Consul outage never busy-loops the watch goroutine.
@@ -53,10 +71,15 @@ type consulRegistry struct {
 	// instances instead of always returning the first one.
 	rr atomic.Uint64
 
-	// mu guards heartbeats. Each registered TTL service has a cancel func that
-	// stops its heartbeat goroutine; Deregister calls it.
+	// mu guards heartbeats and closed. Each registered TTL service has a cancel func
+	// that stops its heartbeat goroutine; Deregister calls it.
 	mu         sync.Mutex
 	heartbeats map[string]context.CancelFunc
+	// closed reports whether Close has run. Once true, startHeartbeat refuses to
+	// insert a new heartbeat, so a Register that races shutdown (e.g. a pending
+	// RegisterAsync retry) cannot resurrect a background goroutine that escapes
+	// Close's cleanup. Guarded by mu.
+	closed bool
 }
 
 // newTunedConfig builds an *api.Config wired to a connection-hardened
@@ -262,6 +285,16 @@ func isUnknownCheck(err error) bool {
 // catalog dropped it), it re-registers the service to recreate the check and
 // resumes, instead of failing every TTL/2 forever.
 func (r *consulRegistry) startHeartbeat(reg *api.AgentServiceRegistration, ttl string) {
+	// Refuse a new heartbeat once Closed: a Register that raced shutdown must not
+	// resurrect a background goroutine that escapes Close's cleanup.
+	r.mu.Lock()
+	closed := r.closed
+	r.mu.Unlock()
+
+	if closed {
+		return
+	}
+
 	serviceID := reg.ID
 	checkID := ttlCheckID(serviceID)
 
@@ -311,6 +344,16 @@ func (r *consulRegistry) startHeartbeat(reg *api.AgentServiceRegistration, ttl s
 	pass() // first pass moves the check from critical to passing right away
 
 	r.mu.Lock()
+	// Re-check under the storing lock: Close may have run during pass(). When it
+	// did, drop this heartbeat (cancel the context, store nothing) so no goroutine
+	// outlives Close.
+	if r.closed {
+		r.mu.Unlock()
+		cancel()
+
+		return
+	}
+
 	// Replace any pre-existing heartbeat for the same service.
 	if prev, ok := r.heartbeats[serviceID]; ok {
 		prev()
@@ -376,6 +419,11 @@ func (r *consulRegistry) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Mark closed under the same lock that guards heartbeat insertion, so a
+	// startHeartbeat racing this Close either observes closed and refuses to
+	// insert, or was inserted before this and is cancelled/drained here.
+	r.closed = true
+
 	for serviceID, cancel := range r.heartbeats {
 		cancel()
 		delete(r.heartbeats, serviceID)
@@ -436,12 +484,22 @@ func (r *consulRegistry) watchLoop(ctx context.Context, name string, ch chan<- E
 		}
 
 		// Reads honor AllowStale via queryOpts; the watch client omits the
-		// response-header deadline so this blocking long-poll survives.
-		opts := r.queryOpts(ctx)
+		// response-header deadline so this blocking long-poll survives. A per-poll
+		// client-side deadline (watchWaitTime + margin) is layered on top as a safety
+		// ceiling: the server-side WaitTime cannot rescue a wedged connection, so
+		// without this a stuck socket would freeze the watcher forever. The ceiling
+		// sits above watchWaitTime, so a healthy long-poll (which returns by
+		// watchWaitTime) is never truncated. cancel runs before the next iteration so
+		// the timer is released each poll (no leak).
+		pollCtx, cancel := context.WithTimeout(ctx, watchWaitTime+watchPollMargin)
+		opts := r.queryOpts(pollCtx)
 		opts.WaitIndex = lastIndex
 		opts.WaitTime = watchWaitTime
 
 		entries, meta, err := r.watchClient.Health().Service(name, "", false, opts)
+
+		cancel()
+
 		if err != nil {
 			// ctx cancelled mid-poll: exit quietly, no backoff/log needed.
 			if ctx.Err() != nil {
@@ -613,6 +671,15 @@ func serviceMeta(svc Service) map[string]string {
 		meta[k] = v
 	}
 
+	// Strip EVERY reserved key the caller may have copied in before writing the
+	// authoritative values below. Otherwise a stale caller-supplied external_* /
+	// internal_* / scheme key for an endpoint svc does NOT have would survive and
+	// make serviceFromEntry reconstruct a phantom endpoint on the read path. Only
+	// the keys svc actually advertises are re-added afterwards.
+	for _, k := range reservedMetaKeys {
+		delete(meta, k)
+	}
+
 	if svc.External != nil {
 		meta["external_address"] = svc.External.Address
 		meta["external_port"] = strconv.Itoa(svc.External.Port)
@@ -665,6 +732,24 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 	select {
 	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// sleepCtxAny sleeps for d, returning false as soon as EITHER context is done, or
+// true when the full duration elapsed. It lets the RegisterAsync retry loop honor
+// both the caller ctx and the Manager-lifetime baseCtx, so Manager.Close aborts a
+// pending backoff at once.
+func sleepCtxAny(a, b context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-a.Done():
+		return false
+	case <-b.Done():
 		return false
 	case <-t.C:
 		return true

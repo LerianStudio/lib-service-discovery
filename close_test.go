@@ -4,6 +4,7 @@ package libsd
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"testing"
@@ -177,6 +178,12 @@ func TestManagerClose_Idempotent(t *testing.T) {
 	require.NoError(t, m.Close())
 	assert.NotPanics(t, func() { _ = m.Close() })
 	require.NoError(t, m.Close())
+
+	// The sync.Once shutdown guard must delegate to registry.Close exactly once,
+	// no matter how many times Manager.Close is called.
+	reg.mu.Lock()
+	assert.Equal(t, 1, reg.closes, "registry.Close must be invoked exactly once across repeated Manager.Close")
+	reg.mu.Unlock()
 }
 
 func TestManagerClose_NilReceiverSafe(t *testing.T) {
@@ -209,6 +216,63 @@ func TestManagerClose_DisabledManagerSafe(t *testing.T) {
 	assert.NotPanics(t, func() {
 		assert.NoError(t, m.Close())
 	})
+}
+
+// countingCloseRegistry is a Registry whose Close is deliberately NON-idempotent:
+// it errors on every call after the first. It lets a test prove Manager.Close's
+// sync.Once guard invokes registry.Close exactly once.
+type countingCloseRegistry struct {
+	mu     sync.Mutex
+	closes int
+}
+
+func (r *countingCloseRegistry) Register(_ context.Context, _ Service) error  { return nil }
+func (r *countingCloseRegistry) Deregister(_ context.Context, _ string) error { return nil }
+func (r *countingCloseRegistry) Resolve(_ context.Context, _, _ string) (Service, error) {
+	return Service{}, nil
+}
+
+func (r *countingCloseRegistry) Watch(_ context.Context, _ string) (<-chan Event, error) {
+	ch := make(chan Event)
+	close(ch)
+
+	return ch, nil
+}
+
+func (r *countingCloseRegistry) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.closes++
+	if r.closes > 1 {
+		return errors.New("registry closed more than once")
+	}
+
+	return nil
+}
+
+func (r *countingCloseRegistry) closeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.closes
+}
+
+// TestManagerClose_DelegatesToRegistryOnce proves #16: the sync.Once shutdown guard
+// invokes a custom (non-idempotent) registry closer exactly once, so repeated
+// Manager.Close calls neither error nor panic. Against the pre-fix code (registry
+// closer invoked on every Close) the second call would surface the closer's error.
+func TestManagerClose_DelegatesToRegistryOnce(t *testing.T) {
+	t.Parallel()
+
+	reg := &countingCloseRegistry{}
+	m := enabledManager(t, reg)
+
+	require.NoError(t, m.Close())
+	require.NoError(t, m.Close(), "second Close must return the retained (first) result, not re-invoke the closer")
+	require.NoError(t, m.Close())
+
+	assert.Equal(t, 1, reg.closeCount(), "registry.Close must be invoked exactly once")
 }
 
 // ── consulRegistry.Close (direct) ───────────────────────────────────────────────

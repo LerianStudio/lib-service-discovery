@@ -566,6 +566,57 @@ func TestRegister_InternalPortDefaultsToAdvertisedExternalPort(t *testing.T) {
 	assert.Equal(t, "http://svc.ns.svc.cluster.local:8081/health", got.HealthCheck.HTTP)
 }
 
+// TestRegister_ConfigInternalOnlyDropsCallerExternal proves #14: the library
+// derives External/Internal SOLELY from config. A caller-supplied External must
+// NOT survive an internal-only config — otherwise a service could publish an
+// unauthorized external endpoint it was never configured to advertise.
+func TestRegister_ConfigInternalOnlyDropsCallerExternal(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "" // internal-only config: no external endpoint
+	m.config.AdvertiseScheme = ""
+	m.config.AdvertiseInternalAddr = "svc.ns.svc.cluster.local"
+	m.config.AdvertiseInternalPort = 9090
+	m.config.AdvertiseInternalScheme = "http"
+
+	// The caller tries to smuggle in an External (and an Internal) endpoint.
+	got := registerCapture(t, m, Service{
+		Name: "svc-a", Port: 8081,
+		External:    &Endpoint{Address: "attacker.example.com", Port: 443, Scheme: "https"},
+		Internal:    &Endpoint{Address: "caller.internal", Port: 1, Scheme: "https"},
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"},
+	})
+
+	assert.Nil(t, got.External,
+		"an internal-only config must not publish a caller-supplied External")
+
+	require.NotNil(t, got.Internal, "internal endpoint must be derived from config")
+	assert.Equal(t, &Endpoint{Address: "svc.ns.svc.cluster.local", Port: 9090, Scheme: "http"}, got.Internal,
+		"Internal must come from config, not the caller's smuggled pointer")
+}
+
+// TestRegister_ConfigExternalOnlyDropsCallerInternal is the mirror of #14: a
+// caller-supplied Internal must not survive an external-only config.
+func TestRegister_ConfigExternalOnlyDropsCallerInternal(t *testing.T) {
+	t.Parallel()
+
+	m := enabledManager(t, &captureRegistry{})
+	m.config.AdvertiseAddr = "10.0.0.2"
+	// No internal config advertised.
+
+	got := registerCapture(t, m, Service{
+		Name: "svc-a", Port: 8081,
+		Internal:    &Endpoint{Address: "caller.internal", Port: 9090, Scheme: "http"},
+		HealthCheck: &HealthCheck{Interval: "2s", Timeout: "1s"},
+	})
+
+	assert.Nil(t, got.Internal,
+		"an external-only config must not publish a caller-supplied Internal")
+	require.NotNil(t, got.External)
+	assert.Equal(t, "10.0.0.2", got.External.Address)
+}
+
 // ── Caller aliasing (#5: Register must not mutate the caller's inputs) ───────────
 
 func TestRegister_DoesNotMutateCallerHealthCheck(t *testing.T) {

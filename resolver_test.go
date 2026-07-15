@@ -16,10 +16,11 @@ import (
 // watchableRegistry is a Registry stub whose Watch channel and Resolve result
 // are controllable from the test, so we can simulate catalog changes.
 type watchableRegistry struct {
-	mu      sync.Mutex
-	svc     Service
-	err     error
-	watchCh chan Event
+	mu       sync.Mutex
+	svc      Service
+	err      error
+	watchCh  chan Event
+	resolves int
 }
 
 func (r *watchableRegistry) Register(_ context.Context, _ Service) error  { return nil }
@@ -29,7 +30,16 @@ func (r *watchableRegistry) Resolve(_ context.Context, _, _ string) (Service, er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.resolves++
+
 	return r.svc, r.err
+}
+
+func (r *watchableRegistry) resolveCalls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.resolves
 }
 
 func (r *watchableRegistry) Watch(_ context.Context, _ string) (<-chan Event, error) {
@@ -305,6 +315,14 @@ func TestWatchResolveService_WithViewInternalFallbackStaysExternal(t *testing.T)
 	// fallback branch must land on the same external endpoint as the seed.
 	reg.watchCh <- Event{Type: EventDeregistered}
 
+	// Confirm the update loop actually CONSUMED the event and re-resolved before
+	// asserting the retained state, so the assertion is deterministic rather than
+	// passing because the event was never processed. resolveCalls goes to 2 = the
+	// failed seed (1) + the failed watch update (1).
+	require.Eventually(t, func() bool {
+		return reg.resolveCalls() >= 2
+	}, time.Second, 10*time.Millisecond, "update loop must consume the catalog event and re-resolve")
+
 	require.Never(t, func() bool {
 		return dr.Address() != "ext.example.com:8080" || dr.Scheme() != "https"
 	}, 300*time.Millisecond, 20*time.Millisecond,
@@ -365,6 +383,72 @@ func TestDynamicResolver_NilReceiverIsSafe(t *testing.T) {
 	assert.Equal(t, "", dr.Address())
 	assert.Equal(t, "", dr.Scheme())
 	dr.Stop() // must not panic on a nil receiver
+}
+
+// TestDynamicResolver_StoreWritesOneSnapshot proves #18: address and scheme live
+// in ONE immutable snapshot written atomically, so a reader can never observe a
+// torn pair (new address + stale scheme). It is white-box on purpose — it reads
+// dr.snapshot, so reverting to two separate atomic fields would fail to compile.
+func TestDynamicResolver_StoreWritesOneSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dr := &DynamicResolver{}
+	dr.store("10.0.0.2:8443", "https")
+
+	snap := dr.snapshot.Load()
+	require.NotNil(t, snap, "store must publish a snapshot")
+	assert.Equal(t, "10.0.0.2:8443", snap.address)
+	assert.Equal(t, "https", snap.scheme)
+
+	// The public accessors read from that same single snapshot.
+	assert.Equal(t, "10.0.0.2:8443", dr.Address())
+	assert.Equal(t, "https", dr.Scheme())
+
+	// A subsequent store replaces the whole snapshot atomically (no field-by-field
+	// mutation that a concurrent reader could catch half-applied).
+	dr.store("10.0.0.9:80", "http")
+	assert.Equal(t, "10.0.0.9:80", dr.Address())
+	assert.Equal(t, "http", dr.Scheme())
+}
+
+// TestDynamicResolver_ConcurrentStoreAndReadRaceClean hammers store while readers
+// call Address()/Scheme(), so `-race` proves the single atomic.Pointer snapshot is
+// race-free. Each individual read must land on a fully-consistent snapshot.
+func TestDynamicResolver_ConcurrentStoreAndReadRaceClean(t *testing.T) {
+	t.Parallel()
+
+	const (
+		addrA, schemeA = "10.0.0.1:3002", "http"
+		addrB, schemeB = "10.0.0.2:8443", "https"
+	)
+
+	dr := &DynamicResolver{}
+	dr.store(addrA, schemeA)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for i := 0; i < 50000; i++ {
+			if i%2 == 0 {
+				dr.store(addrA, schemeA)
+			} else {
+				dr.store(addrB, schemeB)
+			}
+		}
+	}()
+
+	for i := 0; i < 50000; i++ {
+		// A single Load must never expose a half-written snapshot.
+		if snap := dr.snapshot.Load(); snap != nil {
+			consistent := (snap.address == addrA && snap.scheme == schemeA) ||
+				(snap.address == addrB && snap.scheme == schemeB)
+			require.True(t, consistent, "torn snapshot: address=%q scheme=%q", snap.address, snap.scheme)
+		}
+	}
+
+	<-done
 }
 
 func TestWatchResolve_UpdateFallsBackThenKeepsLast(t *testing.T) {
