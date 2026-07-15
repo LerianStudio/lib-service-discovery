@@ -3,9 +3,13 @@
 ## Pull Request Type
 [//]: # (Check the appropriate box for the type of pull request.)
 
-- [ ] Pipeline
-- [ ] Tests
+- [ ] Feature
+- [ ] Bug Fix
+- [ ] Refactor
+- [ ] Performance
 - [ ] Documentation
+- [ ] Tests
+- [ ] Chore / CI / Pipeline
 - [ ] Helm
 
 ## Checklist
