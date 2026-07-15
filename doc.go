@@ -58,7 +58,11 @@
 // via SD_INTERNAL_ADDRESS (and optionally SD_INTERNAL_PORT / SD_INTERNAL_SCHEME).
 // A consumer picks a view with Manager.ResolveEndpoint (explicit view) or
 // Manager.ResolvePreferredEndpoint (the configured SD_PREFER_VIEW default), and
-// the auto-refreshing resolvers accept WithView.
+// the auto-refreshing resolvers accept WithView. Those two return a bare
+// host:port; a consumer that builds an HTTP client (a full URL) uses
+// Manager.ResolveURL / Manager.ResolvePreferredURL, which return the advertised
+// "scheme://host:port" of the view — so switching a consumer external<->internal
+// is done purely via SD_PREFER_VIEW, with no per-consumer code change.
 //
 // The resolve contract is ASYMMETRIC:
 //
@@ -143,5 +147,6 @@
 //   - SD_TLS_HANDSHAKE_TIMEOUT    — TLS handshake timeout to the server (duration); empty applies a default in New()
 //   - SD_RESPONSE_HEADER_TIMEOUT  — response-header timeout for the fast client only, never the Watch client (duration); empty applies a default in New()
 //   - SD_SEED_TIMEOUT             — bound for the fail-open resolver seed resolve, both DynamicResolver and managed (duration); empty applies a default in New()
+//   - SD_WATCH_WAIT_TIME          — blocking-query wait for the catalog watch long-poll (duration); empty defaults to 30s. Keep it below any reverse-proxy read timeout in front of Consul, else the watch 504s; raise it for a direct in-cluster Consul to cut idle polling
 //   - SD_ALLOW_STALE              — "true"/"false" to opt reads into/out of Consul stale mode; unset defaults to true (stale reads, available during a leader blip)
 package libsd

@@ -522,6 +522,25 @@ func (m *Manager) ResolveService(ctx context.Context, name string, fallback Serv
 // per-request balancing — spreading load across replicas is the downstream's job
 // (resolve to the Kubernetes Service name; an ingress handles the external path).
 func (m *Manager) ResolveEndpoint(ctx context.Context, name string, view EndpointView, fallback string) (string, error) {
+	return m.resolveEndpoint(ctx, name, view, fallback, false)
+}
+
+// ResolveURL is like ResolveEndpoint but returns a scheme-complete URL
+// ("scheme://host:port") instead of a bare host:port, so a caller that builds an
+// HTTP client (e.g. lib-auth) gets a usable address without re-attaching the
+// scheme itself. The scheme comes from the resolved endpoint's advertised scheme
+// (SD_EXTERNAL_SCHEME / SD_INTERNAL_SCHEME). When the resolved endpoint carries no
+// scheme it degrades to fallback rather than emit a malformed "://host:port", so
+// fallback here is a full URL. Same disabled/cold/view semantics as
+// ResolveEndpoint. Pair with ResolvePreferredURL to switch external↔internal
+// purely via SD_PREFER_VIEW, with no per-consumer code change.
+func (m *Manager) ResolveURL(ctx context.Context, name string, view EndpointView, fallback string) (string, error) {
+	return m.resolveEndpoint(ctx, name, view, fallback, true)
+}
+
+// resolveEndpoint is the shared core of ResolveEndpoint (asURL=false → host:port)
+// and ResolveURL (asURL=true → scheme://host:port).
+func (m *Manager) resolveEndpoint(ctx context.Context, name string, view EndpointView, fallback string, asURL bool) (string, error) {
 	if m == nil {
 		return "", ErrNilManager
 	}
@@ -576,7 +595,42 @@ func (m *Manager) ResolveEndpoint(ctx context.Context, name string, view Endpoin
 			log.String("view", string(view)))
 	}
 
-	return ep.Addr(), nil
+	if asURL {
+		if ep.Scheme == "" {
+			// No advertised scheme: cannot build a URL. Degrade to the fallback URL
+			// rather than return a malformed "://host:port"; error only when none.
+			if fallback != "" {
+				m.logger.Log(ctx, log.LevelWarn, "service resolved",
+					log.String("service", name),
+					log.String("addr", fallback),
+					log.String("source", "fallback"),
+					log.String("reason", "resolved endpoint has no scheme"),
+					log.String("view", string(view)))
+
+				return fallback, nil
+			}
+
+			return "", fmt.Errorf("%w: %q has no scheme for view %q", ErrEndpointViewUnavailable, name, view)
+		}
+
+		url := fmt.Sprintf("%s://%s", ep.Scheme, ep.Addr())
+		m.logger.Log(ctx, log.LevelInfo, "endpoint resolved",
+			log.String("service", name),
+			log.String("view", string(view)),
+			log.String("addr", url),
+			log.String("source", "consul"))
+
+		return url, nil
+	}
+
+	addr := ep.Addr()
+	m.logger.Log(ctx, log.LevelInfo, "endpoint resolved",
+		log.String("service", name),
+		log.String("view", string(view)),
+		log.String("addr", addr),
+		log.String("source", "consul"))
+
+	return addr, nil
 }
 
 // ResolvePreferredEndpoint resolves name using the Manager's configured default
@@ -592,6 +646,19 @@ func (m *Manager) ResolvePreferredEndpoint(ctx context.Context, name, fallback s
 	}
 
 	return m.ResolveEndpoint(ctx, name, m.preferView, fallback)
+}
+
+// ResolvePreferredURL is ResolveURL using the Manager's configured default view
+// (Config.PreferView / SD_PREFER_VIEW), returning a scheme-complete URL. This is
+// the one call a URL consumer needs so that switching external↔internal is done
+// purely via SD_PREFER_VIEW in config — no per-consumer code change. fallback is
+// a full URL. Same disabled/fallback semantics as ResolveURL.
+func (m *Manager) ResolvePreferredURL(ctx context.Context, name, fallback string) (string, error) {
+	if m == nil {
+		return "", ErrNilManager
+	}
+
+	return m.ResolveURL(ctx, name, m.preferView, fallback)
 }
 
 // Deregister removes serviceID from the registry.

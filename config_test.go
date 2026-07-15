@@ -164,6 +164,25 @@ func TestConfigFromEnv_SeedTimeoutDefaultWhenUnset(t *testing.T) {
 	assert.Zero(t, ConfigFromEnv().SeedTimeout)
 }
 
+// TestWithDefaults_WatchWaitTime covers the WatchWaitTime knob: zero picks up
+// defaultWatchWaitTime (30s), an explicit value is preserved. Pure (no env), parallel.
+func TestWithDefaults_WatchWaitTime(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, defaultWatchWaitTime, Config{}.withDefaults().WatchWaitTime,
+		"zero WatchWaitTime must default")
+	assert.Equal(t, 30*time.Second, defaultWatchWaitTime,
+		"default watch wait must be short enough to fit under a ~60s reverse-proxy read timeout")
+	assert.Equal(t, 45*time.Second, Config{WatchWaitTime: 45 * time.Second}.withDefaults().WatchWaitTime,
+		"explicit WatchWaitTime must not be overridden")
+}
+
+func TestConfigFromEnv_WatchWaitTime(t *testing.T) {
+	t.Setenv("SD_WATCH_WAIT_TIME", "50s")
+
+	assert.Equal(t, 50*time.Second, ConfigFromEnv().WatchWaitTime)
+}
+
 func TestConfigFromEnv_DefaultsWhenUnset(t *testing.T) {
 	// Isolate from any ambient values.
 	t.Setenv("SD_ADDRESS", "")
