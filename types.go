@@ -18,14 +18,17 @@ var (
 	// ErrEmptyAdvertiseAddr is returned when SERVICE_DISCOVERY_ENABLED=true but
 	// SERVICE_ADVERTISE_ADDR is not set.
 	//
-	// Deprecated: superseded by ErrNoEndpoint. Validate now returns ErrNoEndpoint
-	// when neither an external nor an internal advertise address is configured.
+	// Deprecated: superseded by ErrNoEndpoint. Register returns ErrNoEndpoint when
+	// the service to register has neither an external nor an internal endpoint.
 	ErrEmptyAdvertiseAddr = errors.New("lib-service-discovery: SERVICE_ADVERTISE_ADDR is required when discovery is enabled")
 
-	// ErrNoEndpoint is returned by Validate when discovery is enabled but neither
-	// an external (AdvertiseAddr) nor an internal (AdvertiseInternalAddr) advertise
-	// address is configured — a registrable instance must expose at least one.
-	ErrNoEndpoint = errors.New("lib-service-discovery: at least one advertise address (external or internal) is required when discovery is enabled")
+	// ErrNoEndpoint is returned by Register when discovery is enabled but the
+	// service to register has no reachable endpoint — neither an external
+	// (AdvertiseAddr) nor an internal (AdvertiseInternalAddr) advertise address is
+	// configured, and the service carries no endpoint of its own. Registering
+	// requires at least one endpoint; resolving and watching do not (a consumer-only
+	// Manager is valid). It is NOT returned by New or Validate.
+	ErrNoEndpoint = errors.New("lib-service-discovery: at least one advertise address (external or internal) is required to register")
 
 	// ErrEndpointViewUnavailable is returned by Service.EndpointFor when the
 	// requested view cannot be satisfied: an External view against a provider that

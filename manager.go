@@ -110,8 +110,12 @@ func WithWorkload(id string) Option {
 
 // New creates a Manager from cfg. Options are applied before the default Consul
 // registry is created, so WithRegistry can override the backend entirely.
-// Returns ErrNoEndpoint when discovery is enabled but neither an external nor an
-// internal advertise address is set.
+//
+// New requires only ConsulAddr when discovery is enabled (ErrEmptyConsulAddr
+// otherwise). An advertise address is NOT required: an enabled Manager with no
+// advertise address is a valid consumer-only Manager that resolves and watches but
+// cannot register. The advertise requirement is enforced by Register, which returns
+// ErrNoEndpoint when the service to register has no endpoint.
 func New(cfg Config, opts ...Option) (*Manager, error) {
 	cfg = cfg.withDefaults()
 
@@ -238,6 +242,17 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 	// Reconcile External <-> the deprecated flat mirror after config is applied.
 	svc.normalizeEndpoints()
 
+	// Registering requires a reachable endpoint. The advertised endpoints are
+	// derived solely from config above (the caller's flat fields and endpoint
+	// pointers were cleared), so a consumer-only Manager (Enabled with no advertise
+	// address) reaches here with neither External nor Internal set. Resolving does
+	// not need an endpoint, but registering does — surface ErrNoEndpoint rather than
+	// publishing an instance with a ":0" address. This is the requirement that used
+	// to live in Config.Validate; it now applies only on the register path.
+	if svc.External == nil && svc.Internal == nil {
+		return ErrNoEndpoint
+	}
+
 	if m.workload != "" {
 		// Copy before appending so we never mutate the caller's backing array.
 		tags := make([]string, len(svc.Tags), len(svc.Tags)+1)
@@ -245,17 +260,29 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 		svc.Tags = append(tags, "workload="+m.workload)
 	}
 
-	// TTL checks need no reachable endpoint; only build the HTTP URL for HTTP checks.
+	svc, err := m.applyHealthCheck(ctx, svc)
+	if err != nil {
+		return err
+	}
+
+	return m.registry.Register(ctx, svc)
+}
+
+// applyHealthCheck normalizes svc.HealthCheck ahead of registration and returns the
+// updated Service. It never mutates the caller's HealthCheck (svc is a value but its
+// HealthCheck is a shared pointer, so it copies before writing). TTL checks need no
+// reachable endpoint; only HTTP checks build a probe URL. An unparseable TTL is a
+// hard configuration error (ErrInvalidTTL). Callers pass a svc that already has at
+// least one endpoint (Register enforces ErrNoEndpoint first).
+func (m *Manager) applyHealthCheck(ctx context.Context, svc Service) (Service, error) {
 	switch {
 	case svc.HealthCheck != nil && svc.HealthCheck.TTL != "":
 		// TTL mode: normalize the TTL through the safe floor before it reaches the
 		// registry, so a GC pause or brief blip never triggers a false
-		// deregistration. Copy the HealthCheck before mutating (svc is a value but
-		// HealthCheck is a pointer shared with the caller) so the caller's TTL is
-		// left untouched. An unparseable TTL is a hard configuration error.
+		// deregistration.
 		ttl, err := ttlWithDefaults(svc.HealthCheck.TTL)
 		if err != nil {
-			return err
+			return svc, err
 		}
 
 		hc := *svc.HealthCheck
@@ -263,15 +290,13 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 		svc.HealthCheck = &hc
 
 	case svc.HealthCheck != nil:
-		// HTTP mode (TTL empty). Copy the HealthCheck before mutating: svc is a
-		// value, but HealthCheck is a pointer shared with the caller, so writing
-		// HTTP in place would leak back.
+		// HTTP mode (TTL empty).
 		hc := *svc.HealthCheck
 
 		// Probe the internal endpoint when advertised (Consul runs in-cluster),
 		// degrading to the external endpoint otherwise. EndpointFor(Internal) only
-		// errors when neither endpoint exists — defensive, since Validate requires
-		// at least one; in that case skip the HTTP URL.
+		// errors when neither endpoint exists — defensive, since Register already
+		// rejected the no-endpoint case; in that case skip the HTTP URL.
 		if target, err := svc.EndpointFor(Internal); err != nil {
 			m.logger.Log(ctx, log.LevelWarn, "no reachable endpoint for health check",
 				log.String("name", svc.Name))
@@ -282,7 +307,7 @@ func (m *Manager) Register(ctx context.Context, svc Service) error {
 		svc.HealthCheck = &hc
 	}
 
-	return m.registry.Register(ctx, svc)
+	return svc, nil
 }
 
 // RegisterAsync registers svc without blocking the caller and without failing
