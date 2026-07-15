@@ -363,26 +363,26 @@ func (m *Manager) workloadTag() string {
 }
 
 // resolveEmptyFallback applies the fail-open precedence when the managed cache is
-// empty (the lazy seed failed and the background watch has not yet recovered a
-// value): serve the per-call fallback when provided, else surface the seed error
-// (or ErrNoHealthyInstances when none was recorded).
-func (m *Manager) resolveEmptyFallback(ctx context.Context, name, fallback string, seedErr error) (string, error) {
+// empty (the lazy seed failed, the background watch has not yet recovered a value,
+// or an authoritative empty catalog cleared it): serve the per-call fallback when
+// provided, else surface the resolver's empty error (mr.emptyErr) — the
+// authoritative ErrNoHealthyInstances after a clear, otherwise the seed error, else
+// ErrNoHealthyInstances.
+func (m *Manager) resolveEmptyFallback(ctx context.Context, name, fallback string, mr *managedResolver) (string, error) {
+	emptyErr := mr.emptyErr()
+
 	if fallback != "" {
 		m.logger.Log(ctx, log.LevelWarn, "service resolved",
 			log.String("service", name),
 			log.String("addr", fallback),
 			log.String("source", "fallback"),
 			log.String("reason", "discovery unavailable"),
-			log.Err(seedErr))
+			log.Err(emptyErr))
 
 		return fallback, nil
 	}
 
-	if seedErr != nil {
-		return "", seedErr
-	}
-
-	return "", ErrNoHealthyInstances
+	return "", emptyErr
 }
 
 // Resolve returns the host:port address of name.
@@ -395,7 +395,8 @@ func (m *Manager) resolveEmptyFallback(ctx context.Context, name, fallback strin
 //     workload tag when a workload is configured).
 //   - Enabled, cache empty (seed failed, watch not yet recovered), fallback provided:
 //     returns fallback (logs warning).
-//   - Enabled, cache empty, no fallback: returns the seed error.
+//   - Enabled, cache empty, no fallback: returns ErrNoHealthyInstances when the
+//     emptiness is authoritative (catalog confirmed empty), else the seed error.
 //
 // To be fail-open when the discovery server is down, provide a fallback: while the
 // lazy seed fails the resolver serves it until the watch recovers a live value.
@@ -430,7 +431,7 @@ func (m *Manager) Resolve(ctx context.Context, name, fallback string) (string, e
 		return svc.Addr(), nil
 	}
 
-	return m.resolveEmptyFallback(ctx, name, fallback, mr.seedErr)
+	return m.resolveEmptyFallback(ctx, name, fallback, mr)
 }
 
 // ResolveService is like Resolve but returns the full Service struct, giving
@@ -465,22 +466,20 @@ func (m *Manager) ResolveService(ctx context.Context, name string, fallback Serv
 		return svc, nil
 	}
 
+	emptyErr := mr.emptyErr()
+
 	if fallback.Address != "" {
 		m.logger.Log(ctx, log.LevelWarn, "service resolved",
 			log.String("service", name),
 			log.String("addr", fallback.Addr()),
 			log.String("source", "fallback"),
 			log.String("reason", "discovery unavailable"),
-			log.Err(mr.seedErr))
+			log.Err(emptyErr))
 
 		return fallback, nil
 	}
 
-	if mr.seedErr != nil {
-		return Service{}, mr.seedErr
-	}
-
-	return Service{}, ErrNoHealthyInstances
+	return Service{}, emptyErr
 }
 
 // ResolveEndpoint resolves name and returns the host:port of the requested view
@@ -520,7 +519,7 @@ func (m *Manager) ResolveEndpoint(ctx context.Context, name string, view Endpoin
 
 	svc, ok := mr.service()
 	if !ok {
-		return m.resolveEmptyFallback(ctx, name, fallback, mr.seedErr)
+		return m.resolveEmptyFallback(ctx, name, fallback, mr)
 	}
 
 	ep, epErr := svc.EndpointFor(view)

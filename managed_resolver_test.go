@@ -474,6 +474,63 @@ func TestManagedResolver_TransientErrorKeepsCache(t *testing.T) {
 		"a transient watch error must keep the last-known-good value")
 }
 
+// TestManagedResolver_ClearedAfterTransientSeedSurfacesNoHealthyInstances is the
+// 2nd-round companion of #13: it proves the empty-cache path never masks an
+// AUTHORITATIVE empty catalog with a STALE transient seed error.
+//
+// Scenario: the lazy seed fails with a TRANSIENT error (e.g. connection
+// refused), so seedErr=transient, seeded=false, cache empty. The background
+// watch then confirms an authoritative empty catalog (ErrNoHealthyInstances),
+// which clears the resolver. A subsequent no-fallback Resolve/ResolveService
+// must surface the AUTHORITATIVE sentinel (ErrNoHealthyInstances), NOT the
+// now-stale transient seed error, which would misreport the real state.
+//
+// Against the pre-fix code (empty-cache path returns seedErr whenever it is set,
+// and clear() left seedErr untouched with no authoritative-empty signal) this
+// fails: the resolve keeps surfacing the stale transient error.
+func TestManagedResolver_ClearedAfterTransientSeedSurfacesNoHealthyInstances(t *testing.T) {
+	t.Parallel()
+
+	// Seed FAILS transiently: cache empty, seedErr=transient, authEmpty=false.
+	transient := errors.New("connection refused")
+	reg := &countingRegistry{
+		err:     transient,
+		watchCh: make(chan Event, 1),
+	}
+	m := enabledManager(t, reg)
+
+	// First resolve triggers the seed (fails transiently) and starts the watch.
+	// Before any authoritative empty is observed, the transient error surfaces.
+	_, err := m.Resolve(context.Background(), "svc-a", "")
+	require.ErrorIs(t, err, transient,
+		"a transient seed failure surfaces the transient error before any authoritative empty")
+
+	// The catalog is now authoritatively empty (Consul up, 0 healthy). The watch
+	// re-resolves, gets ErrNoHealthyInstances, and clears the resolver.
+	reg.set(Service{}, fmt.Errorf("%w: svc-a", ErrNoHealthyInstances))
+	reg.watchCh <- Event{Type: EventDeregistered}
+
+	// After the authoritative clear, a no-fallback Resolve must surface the
+	// AUTHORITATIVE sentinel, NOT the now-stale transient seed error.
+	require.Eventually(t, func() bool {
+		_, rErr := m.Resolve(context.Background(), "svc-a", "")
+
+		return errors.Is(rErr, ErrNoHealthyInstances)
+	}, time.Second, 10*time.Millisecond,
+		"after an authoritative empty clear, the empty cache must surface ErrNoHealthyInstances, not the stale transient seed error")
+
+	// The stale transient error must no longer be surfaced by either resolver view.
+	_, rErr := m.Resolve(context.Background(), "svc-a", "")
+	require.NotErrorIs(t, rErr, transient,
+		"the stale transient seed error must not mask the authoritative empty state (Resolve)")
+
+	_, svcErr := m.ResolveService(context.Background(), "svc-a", Service{})
+	require.ErrorIs(t, svcErr, ErrNoHealthyInstances,
+		"ResolveService must surface ErrNoHealthyInstances after an authoritative clear")
+	require.NotErrorIs(t, svcErr, transient,
+		"the stale transient seed error must not mask the authoritative empty state (ResolveService)")
+}
+
 // TestManagedResolver_CloseStopsWatchers proves Manager.Close cancels the managed
 // resolvers' background watch goroutines. It mirrors close_test.go: a quiet
 // goroutine baseline, a live watcher raising the count, then a return to baseline

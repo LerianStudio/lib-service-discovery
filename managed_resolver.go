@@ -44,6 +44,17 @@ type managedResolver struct {
 	// once (single writer) and read only when the cache is empty; the once/atomic
 	// happens-before covers it without further synchronization.
 	seedErr error
+	// authEmpty reports whether the LAST authoritative signal was an empty catalog
+	// (Consul up, zero healthy). It is set false by store (a fresh value arrived)
+	// and true by clear (an authoritative empty was observed). It exists so the
+	// empty-cache request path can surface the authoritative ErrNoHealthyInstances
+	// instead of a now-stale seedErr after a clear: clear runs on the watch
+	// goroutine and store on both seed and watch, so this cross-goroutine state
+	// MUST be atomic — writing seedErr from clear would add a second writer and
+	// race the seed path (whose single-writer invariant is owned by once). An
+	// atomic flag keeps seedErr single-writer while still letting clear override
+	// the surfaced error.
+	authEmpty atomic.Bool
 	// cancel stops the background watch. It is an atomic pointer because the seed
 	// (which sets it, outside resolversMu) and Manager.Close (which reads it, under
 	// resolversMu) can run concurrently for a first-resolve still in flight.
@@ -52,9 +63,12 @@ type managedResolver struct {
 
 // store records svc as the last-known-good value and marks the resolver seeded.
 // current is written before seeded so a reader gating on seeded never observes an
-// absent or stale Service.
+// absent or stale Service. It also clears authEmpty: a fresh value supersedes any
+// prior authoritative-empty signal, so the empty-cache path (if the cache is later
+// cleared by a transient blip) resumes normal seedErr precedence.
 func (mr *managedResolver) store(svc Service) {
 	mr.current.Store(svc)
+	mr.authEmpty.Store(false)
 	mr.seeded.Store(true)
 }
 
@@ -62,10 +76,40 @@ func (mr *managedResolver) store(svc Service) {
 // request path degrades to fallback/error. It is the authoritative-empty-catalog
 // counterpart of store: current is left untouched (never read once seeded is
 // false). Called only from the watch goroutine, so it never races store (same
-// single writer); seedErr is deliberately not touched (its once/atomic
-// happens-before is owned by the seed path).
+// single writer).
+//
+// It sets authEmpty so the empty-cache request path surfaces the authoritative
+// ErrNoHealthyInstances rather than a possibly-stale seedErr (e.g. a seed that
+// failed transiently before the catalog was confirmed empty). seedErr itself is
+// deliberately NOT written here: it stays single-writer (owned by the seed path
+// under once); authEmpty is the atomic override that carries the authoritative
+// state across the seed/watch goroutine boundary.
 func (mr *managedResolver) clear() {
+	mr.authEmpty.Store(true)
 	mr.seeded.Store(false)
+}
+
+// emptyErr returns the error the request path must surface when the cache is empty
+// and no fallback applies. After an authoritative empty-catalog clear
+// (authEmpty==true) the emptiness is a real, current state, so it surfaces the
+// authoritative ErrNoHealthyInstances — never a stale seedErr from an earlier
+// transient seed failure. Otherwise it applies the seed-path precedence: the
+// recorded seedErr when present, else ErrNoHealthyInstances.
+//
+// Reading seedErr here is race-free: it is written only under the seed's once, and
+// managedResolverFor runs that once before returning the resolver, so every resolve
+// that calls emptyErr happens-after the seed. authEmpty is atomic, covering the
+// cross-goroutine write from clear.
+func (mr *managedResolver) emptyErr() error {
+	if mr.authEmpty.Load() {
+		return ErrNoHealthyInstances
+	}
+
+	if mr.seedErr != nil {
+		return mr.seedErr
+	}
+
+	return ErrNoHealthyInstances
 }
 
 // service returns the cached Service and whether one is present.
