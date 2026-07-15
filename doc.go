@@ -58,7 +58,11 @@
 // via SD_INTERNAL_ADDRESS (and optionally SD_INTERNAL_PORT / SD_INTERNAL_SCHEME).
 // A consumer picks a view with Manager.ResolveEndpoint (explicit view) or
 // Manager.ResolvePreferredEndpoint (the configured SD_PREFER_VIEW default), and
-// the auto-refreshing resolvers accept WithView.
+// the auto-refreshing resolvers accept WithView. Those two return a bare
+// host:port; a consumer that builds an HTTP client (a full URL) uses
+// Manager.ResolveURL / Manager.ResolvePreferredURL, which return the advertised
+// "scheme://host:port" of the view — so switching a consumer external<->internal
+// is done purely via SD_PREFER_VIEW, with no per-consumer code change.
 //
 // The resolve contract is ASYMMETRIC:
 //

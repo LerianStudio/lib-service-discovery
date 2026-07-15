@@ -1138,3 +1138,115 @@ func TestResolveEndpoint_InternalHitDoesNotWarn(t *testing.T) {
 	assert.False(t, cap.has("internal view degraded to external"),
 		"a genuine internal hit must not emit the degrade warning")
 }
+
+// ── ResolveURL / ResolvePreferredURL ─────────────────────────────────────────
+
+func TestResolveURL(t *testing.T) {
+	t.Parallel()
+
+	extSvc := Service{External: &Endpoint{Address: "10.0.0.1", Port: 8082, Scheme: "https"}}
+	intSvc := Service{
+		External: &Endpoint{Address: "10.0.0.1", Port: 8082, Scheme: "https"},
+		Internal: &Endpoint{Address: "svc.ns.svc.cluster.local", Port: 9090, Scheme: "http"},
+	}
+	noSchemeSvc := Service{External: &Endpoint{Address: "10.0.0.1", Port: 8082}}
+
+	tests := []struct {
+		name       string
+		enabled    bool
+		resolveRes Service
+		resolveErr error
+		view       EndpointView
+		fallback   string
+		wantAddr   string
+		wantErrIs  error
+	}{
+		{name: "disabled with fallback URL returns fallback", enabled: false, view: External, fallback: "http://svc-b:8082", wantAddr: "http://svc-b:8082"},
+		{name: "disabled without fallback errors", enabled: false, view: External, wantErrIs: ErrDiscoveryDisabledNoFallback},
+		{name: "internal view returns scheme URL", enabled: true, resolveRes: intSvc, view: Internal, wantAddr: "http://svc.ns.svc.cluster.local:9090"},
+		{name: "external view returns scheme URL", enabled: true, resolveRes: extSvc, view: External, wantAddr: "https://10.0.0.1:8082"},
+		{name: "internal degrades to external URL when no internal", enabled: true, resolveRes: extSvc, view: Internal, wantAddr: "https://10.0.0.1:8082"},
+		{name: "no scheme with fallback returns fallback", enabled: true, resolveRes: noSchemeSvc, view: External, fallback: "http://svc-b:8082", wantAddr: "http://svc-b:8082"},
+		{name: "no scheme without fallback errors", enabled: true, resolveRes: noSchemeSvc, view: External, wantErrIs: ErrEndpointViewUnavailable},
+		{name: "registry error without fallback errors", enabled: true, resolveErr: ErrNoHealthyInstances, view: Internal, wantErrIs: ErrNoHealthyInstances},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var m *Manager
+			if tt.enabled {
+				m = enabledManager(t, &stubRegistry{resolveResult: tt.resolveRes, resolveErr: tt.resolveErr})
+			} else {
+				m = disabledManager(t)
+			}
+
+			addr, err := m.ResolveURL(context.Background(), "svc-b", tt.view, tt.fallback)
+
+			if tt.wantErrIs != nil {
+				require.ErrorIs(t, err, tt.wantErrIs)
+				assert.Empty(t, addr)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAddr, addr)
+		})
+	}
+}
+
+func TestResolvePreferredURL(t *testing.T) {
+	t.Parallel()
+
+	intSvc := Service{
+		External: &Endpoint{Address: "10.0.0.1", Port: 8082, Scheme: "https"},
+		Internal: &Endpoint{Address: "svc.ns.svc.cluster.local", Port: 9090, Scheme: "http"},
+	}
+
+	newM := func(t *testing.T, view EndpointView) *Manager {
+		t.Helper()
+
+		m, err := New(Config{
+			Enabled:       true,
+			ConsulAddr:    "localhost:8500",
+			AdvertiseAddr: "127.0.0.1",
+			PreferView:    view,
+			Logger:        log.NewNop(),
+		}, WithRegistry(&stubRegistry{resolveResult: intSvc}))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = m.Close() })
+
+		return m
+	}
+
+	t.Run("prefer internal returns internal URL", func(t *testing.T) {
+		t.Parallel()
+
+		addr, err := newM(t, Internal).ResolvePreferredURL(context.Background(), "svc-b", "http://fallback:1")
+		require.NoError(t, err)
+		assert.Equal(t, "http://svc.ns.svc.cluster.local:9090", addr)
+	})
+
+	t.Run("prefer external returns external URL", func(t *testing.T) {
+		t.Parallel()
+
+		addr, err := newM(t, External).ResolvePreferredURL(context.Background(), "svc-b", "http://fallback:1")
+		require.NoError(t, err)
+		assert.Equal(t, "https://10.0.0.1:8082", addr)
+	})
+}
+
+func TestNilReceiver_ResolveURL(t *testing.T) {
+	t.Parallel()
+
+	var m *Manager
+
+	_, err := m.ResolveURL(context.Background(), "svc", External, "")
+	require.ErrorIs(t, err, ErrNilManager)
+
+	_, err = m.ResolvePreferredURL(context.Background(), "svc", "")
+	require.ErrorIs(t, err, ErrNilManager)
+}
