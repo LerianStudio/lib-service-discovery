@@ -1,5 +1,18 @@
 # Lib-service-discovery Changelog
 
+## [1.1.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v1.1.0)
+
+Features:
+- Added `ResolveURL` and `ResolvePreferredURL` functions, which are scheme-aware and view-aware. (@guimoreirar)
+- Introduced logging for resolved endpoint URLs and made `SD_WATCH_WAIT_TIME` configurable, with a default of 30 seconds. (@guimoreirar)
+
+Fixes:
+- Improved the logging for the managed-resolver cache to be quieter and less confusing. (@guimoreirar)
+
+[Compare changes](https://github.com/LerianStudio/lib-service-discovery/compare/v1.0.0...v1.1.0)
+
+---
+
 ## [1.0.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v1.0.0)
 
 Features:
