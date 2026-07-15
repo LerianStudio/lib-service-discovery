@@ -613,10 +613,24 @@ func (m *Manager) resolveEndpoint(ctx context.Context, name string, view Endpoin
 			return "", fmt.Errorf("%w: %q has no scheme for view %q", ErrEndpointViewUnavailable, name, view)
 		}
 
-		return fmt.Sprintf("%s://%s", ep.Scheme, ep.Addr()), nil
+		url := fmt.Sprintf("%s://%s", ep.Scheme, ep.Addr())
+		m.logger.Log(ctx, log.LevelInfo, "endpoint resolved",
+			log.String("service", name),
+			log.String("view", string(view)),
+			log.String("addr", url),
+			log.String("source", "consul"))
+
+		return url, nil
 	}
 
-	return ep.Addr(), nil
+	addr := ep.Addr()
+	m.logger.Log(ctx, log.LevelInfo, "endpoint resolved",
+		log.String("service", name),
+		log.String("view", string(view)),
+		log.String("addr", addr),
+		log.String("source", "consul"))
+
+	return addr, nil
 }
 
 // ResolvePreferredEndpoint resolves name using the Manager's configured default

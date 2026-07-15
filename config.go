@@ -46,6 +46,15 @@ const (
 	// managed resolvers' lazy seed (the single per-name Consul touch on the resolve
 	// path); the background watch that follows is never truncated by it.
 	defaultSeedTimeout = 3 * time.Second
+
+	// defaultWatchWaitTime caps how long a single blocking catalog watch query
+	// parks before returning. It bounds only IDLE re-polling — a catalog change
+	// returns immediately via WaitIndex, so this never adds change-detection
+	// latency. Kept short so the long-poll fits within common reverse-proxy read
+	// timeouts (nginx/openresty default ~60s) in front of Consul: a longer wait
+	// behind such a proxy surfaces as 504 Gateway Timeout on the watch. A direct
+	// in-cluster Consul can raise it via SD_WATCH_WAIT_TIME to reduce idle polling.
+	defaultWatchWaitTime = 30 * time.Second
 )
 
 // Config holds the configuration for the Manager.
@@ -140,6 +149,14 @@ type Config struct {
 	// from the caller's context; it never truncates the long-lived watch.
 	SeedTimeout time.Duration
 
+	// WatchWaitTime caps how long a single blocking catalog watch query parks
+	// before returning. It bounds only IDLE re-polling — a catalog change returns
+	// immediately via WaitIndex, so this never adds change-detection latency. Maps
+	// to SD_WATCH_WAIT_TIME. Zero applies defaultWatchWaitTime via withDefaults.
+	// Keep it below any reverse proxy's read timeout in front of Consul (else the
+	// long-poll 504s); raise it for a direct in-cluster Consul to cut idle polling.
+	WatchWaitTime time.Duration
+
 	// AllowStale opts reads (Resolve and Watch) into Consul stale mode
 	// (QueryOptions.AllowStale). Maps to SD_ALLOW_STALE. It is a *bool so the
 	// unset state (nil) is distinguishable from an explicit false: nil defaults to
@@ -178,6 +195,7 @@ type Config struct {
 //	SD_TLS_HANDSHAKE_TIMEOUT  — TLS handshake timeout (duration); empty → default in New()
 //	SD_RESPONSE_HEADER_TIMEOUT — response-header timeout for the fast client (duration); empty → default in New()
 //	SD_SEED_TIMEOUT           — bound for the resolver seed resolve, DynamicResolver and managed (duration); empty → default in New()
+//	SD_WATCH_WAIT_TIME        — blocking-query wait for the catalog watch (duration); empty → 30s. Keep below a reverse proxy's read timeout in front of Consul
 //	SD_ALLOW_STALE            — "true"/"false" to opt reads into/out of Consul stale mode; unset → default (stale reads)
 func ConfigFromEnv() Config {
 	c := Config{
@@ -201,6 +219,7 @@ func ConfigFromEnv() Config {
 		TLSHandshakeTimeout:   firstEnvDuration("SD_TLS_HANDSHAKE_TIMEOUT"),
 		ResponseHeaderTimeout: firstEnvDuration("SD_RESPONSE_HEADER_TIMEOUT"),
 		SeedTimeout:           firstEnvDuration("SD_SEED_TIMEOUT"),
+		WatchWaitTime:         firstEnvDuration("SD_WATCH_WAIT_TIME"),
 		AllowStale:            envBoolPtr("SD_ALLOW_STALE"),
 	}
 
@@ -255,6 +274,10 @@ func (c Config) withDefaults() Config {
 
 	if c.SeedTimeout <= 0 {
 		c.SeedTimeout = defaultSeedTimeout
+	}
+
+	if c.WatchWaitTime <= 0 {
+		c.WatchWaitTime = defaultWatchWaitTime
 	}
 
 	// AllowStale is a *bool so the unset state (nil) is distinguishable from an

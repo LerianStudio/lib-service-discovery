@@ -31,11 +31,6 @@ const (
 	// small TTL never busy-loops the heartbeat goroutine.
 	ttlHeartbeatFloor = time.Second
 
-	// watchWaitTime caps how long a single blocking catalog query parks before
-	// returning. Cancellation is driven by ctx (WithContext), so this only bounds
-	// the long-poll itself.
-	watchWaitTime = 5 * time.Minute
-
 	// watchPollMargin is the safety headroom added on top of watchWaitTime for the
 	// per-poll client-side deadline. A healthy blocking query returns at or before
 	// watchWaitTime, so this ceiling never truncates it; it only bounds a poll whose
@@ -66,6 +61,11 @@ type consulRegistry struct {
 	// QueryOptions.AllowStale. Derived from Config.AllowStale (a *bool, resolved to
 	// a concrete bool by withDefaults, which defaults nil → true / stale reads).
 	allowStale bool
+
+	// watchWaitTime is the blocking-query wait for the catalog watch long-poll.
+	// From Config.WatchWaitTime (defaulted by withDefaults). Kept below any Consul
+	// reverse-proxy read timeout so the long-poll returns before the proxy 504s.
+	watchWaitTime time.Duration
 
 	// rr is a round-robin cursor used by Resolve to spread load across healthy
 	// instances instead of always returning the first one.
@@ -167,11 +167,12 @@ func newConsulRegistry(c Config, logger log.Logger) (Registry, error) {
 	}
 
 	return &consulRegistry{
-		client:      client,
-		watchClient: watchClient,
-		allowStale:  allowStale,
-		logger:      logger,
-		heartbeats:  make(map[string]context.CancelFunc),
+		client:        client,
+		watchClient:   watchClient,
+		allowStale:    allowStale,
+		watchWaitTime: c.WatchWaitTime,
+		logger:        logger,
+		heartbeats:    make(map[string]context.CancelFunc),
 	}, nil
 }
 
@@ -491,10 +492,10 @@ func (r *consulRegistry) watchLoop(ctx context.Context, name string, ch chan<- E
 		// sits above watchWaitTime, so a healthy long-poll (which returns by
 		// watchWaitTime) is never truncated. cancel runs before the next iteration so
 		// the timer is released each poll (no leak).
-		pollCtx, cancel := context.WithTimeout(ctx, watchWaitTime+watchPollMargin)
+		pollCtx, cancel := context.WithTimeout(ctx, r.watchWaitTime+watchPollMargin)
 		opts := r.queryOpts(pollCtx)
 		opts.WaitIndex = lastIndex
-		opts.WaitTime = watchWaitTime
+		opts.WaitTime = r.watchWaitTime
 
 		entries, meta, err := r.watchClient.Health().Service(name, "", false, opts)
 
