@@ -209,10 +209,15 @@ func ConfigFromEnv() Config {
 	return c
 }
 
-// Validate returns an error when the Config is inconsistent. When Enabled is
-// true, ConsulAddr is required, and at least one of AdvertiseAddr (external) or
-// AdvertiseInternalAddr (internal) must be set — an instance must expose at least
-// one reachable endpoint. Neither present returns ErrNoEndpoint.
+// Validate returns an error when the Config is inconsistent. When Enabled is true,
+// only ConsulAddr is required (ErrEmptyConsulAddr otherwise).
+//
+// An advertise address is deliberately NOT required here. A Manager that is Enabled
+// with no advertise address (neither AdvertiseAddr nor AdvertiseInternalAddr) is a
+// valid consumer-only Manager: it can resolve and watch services, it just cannot
+// register one. The advertise requirement is enforced at Register time instead
+// (ErrNoEndpoint), so a pure consumer no longer has to set a dummy advertise
+// address just to pass Validate.
 func (c Config) Validate() error {
 	if !c.Enabled {
 		return nil
@@ -220,10 +225,6 @@ func (c Config) Validate() error {
 
 	if c.ConsulAddr == "" {
 		return ErrEmptyConsulAddr
-	}
-
-	if c.AdvertiseAddr == "" && c.AdvertiseInternalAddr == "" {
-		return ErrNoEndpoint
 	}
 
 	return nil

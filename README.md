@@ -100,8 +100,9 @@ heartbeat; skipping it leaks those goroutines for the life of the process.
 
 The endpoint model is **symmetric**: a service can advertise two endpoints for
 the same instance, and both are optional `*Endpoint` fields on `Service` — but
-**at least one must be advertised** (`Validate` returns `ErrNoEndpoint`
-otherwise).
+**at least one must be advertised to register** (`Register` returns
+`ErrNoEndpoint` otherwise). Resolving needs no advertise address at all — see
+[Consumer-only Manager](#consumer-only-manager).
 
 - **External** (`Service.External`) — the ingress host, reachable from outside
   the cluster. This is the default view.
@@ -150,6 +151,25 @@ To register a service reachable only inside the cluster, set
 `ErrEndpointViewUnavailable`, while `ResolveEndpoint(..., libsd.Internal, "")` and
 the legacy `Resolve` return its internal address.
 
+#### Consumer-only Manager
+
+A service that only **discovers** other services — never registers itself — can
+enable discovery with **no advertise address** (omit both `SD_EXTERNAL_ADDRESS`
+and `SD_INTERNAL_ADDRESS`). `New` and `Config.Validate` succeed, and the Manager
+resolves and watches normally. It simply cannot register: `Register` returns
+`ErrNoEndpoint`. This removes the old footgun of setting a dummy advertise address
+just to satisfy validation.
+
+```go
+// Consumer-only: resolves svc-b, never registers itself.
+sd, err := libsd.New(libsd.Config{
+    Enabled:    true,
+    ConsulAddr: "localhost:8500",
+}, libsd.WithLogger(logger))
+// sd.Resolve(ctx, "svc-b", "svc-b:8082")  → OK
+// sd.Register(ctx, svc)                    → ErrNoEndpoint
+```
+
 #### Deprecated flat fields
 
 `Service.Address` / `Port` / `Scheme` are **deprecated**. They are a
@@ -168,7 +188,7 @@ accepted as a fallback (`SD_` takes precedence when both are set).
 |---|---|---|---|
 | `SD_ENABLED` | `SERVICE_DISCOVERY_ENABLED` | `false` | Set to `"true"` to enable discovery |
 | `SD_ADDRESS` | `CONSUL_ADDR` | `localhost:8500` | Discovery server address (host:port) |
-| `SD_EXTERNAL_ADDRESS` | `SD_ADVERTISE_ADDRESS`, `SERVICE_ADVERTISE_ADDR` | — | External (ingress) address this service advertises (hostname or full URL). At least one of `SD_EXTERNAL_ADDRESS` / `SD_INTERNAL_ADDRESS` is required when enabled |
+| `SD_EXTERNAL_ADDRESS` | `SD_ADVERTISE_ADDRESS`, `SERVICE_ADVERTISE_ADDR` | — | External (ingress) address this service advertises (hostname or full URL). At least one of `SD_EXTERNAL_ADDRESS` / `SD_INTERNAL_ADDRESS` is required to register (a consumer-only Manager needs neither) |
 | `SD_EXTERNAL_PORT` | `SD_ADVERTISE_PORT`, `SERVICE_ADVERTISE_PORT` | `0` | External port override (defaults to the port passed to `Register`) |
 | `SD_WORKLOAD` | `WORKLOAD_ID` | — | Workload scope for tag-based isolation |
 | `SD_TLS` | — | `false` | `"true"` to use HTTPS to the server |

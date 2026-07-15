@@ -46,7 +46,8 @@
 // A registered instance can advertise two endpoints: the external (ingress)
 // endpoint and the in-cluster internal (Kubernetes service DNS) endpoint. The
 // model is symmetric — both Service.External and Service.Internal are optional,
-// but at least one MUST be advertised (Validate returns ErrNoEndpoint otherwise).
+// but at least one MUST be advertised to REGISTER (Register returns ErrNoEndpoint
+// otherwise); resolving needs none (see "Consumer-only Manager" below).
 // The EndpointView type selects which one a consumer wants — External (the
 // default) or Internal. A provider announces its external endpoint via
 // SD_EXTERNAL_ADDRESS (and optionally SD_EXTERNAL_PORT) and its internal endpoint
@@ -77,6 +78,16 @@
 // mirror of the root routable endpoint (External when advertised, else Internal),
 // kept so legacy Resolve/ResolveService/Addr callers always get a routable
 // address — never a mirror of External specifically.
+//
+// # Consumer-only Manager
+//
+// A service that only needs to DISCOVER other services — never register itself —
+// can enable discovery with no advertise address at all (both SD_EXTERNAL_ADDRESS
+// and SD_INTERNAL_ADDRESS omitted). New and Config.Validate succeed; the resulting
+// Manager resolves and watches normally. It just cannot register: Register returns
+// ErrNoEndpoint because a registrable instance must expose at least one reachable
+// endpoint. This removes the old footgun of setting a dummy advertise address only
+// to satisfy Validate.
 //
 // # Usage
 //

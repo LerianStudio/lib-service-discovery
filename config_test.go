@@ -84,9 +84,10 @@ func TestConfigFromEnv_ExternalAddressFallsBackToAliases(t *testing.T) {
 	assert.Equal(t, 3000, c.AdvertisePort)
 }
 
-// TestValidate covers the enabled-mode endpoint requirement: at least one of the
-// external or internal advertise addresses must be present. Pure (no env), so it
-// runs fully parallel.
+// TestValidate covers the enabled-mode requirements: ConsulAddr is required, but an
+// advertise address is NOT — a consumer-only Manager (Enabled, no advertise) is
+// valid and only resolves. The advertise requirement now lives in Register. Pure
+// (no env), so it runs fully parallel.
 func TestValidate(t *testing.T) {
 	t.Parallel()
 
@@ -116,9 +117,9 @@ func TestValidate(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "enabled with neither endpoint errors",
+			name:    "enabled consumer-only (no advertise) is valid",
 			cfg:     Config{Enabled: true, ConsulAddr: "localhost:8500"},
-			wantErr: ErrNoEndpoint,
+			wantErr: nil,
 		},
 	}
 

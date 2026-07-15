@@ -100,10 +100,68 @@ func TestNew_DisabledSucceeds(t *testing.T) {
 	assert.NotNil(t, m)
 }
 
-func TestNew_EnabledMissingAdvertiseAddr(t *testing.T) {
+// TestNew_EnabledConsumerOnlySucceeds verifies the consumer-only mode: an enabled
+// Manager with no advertise address (external or internal) is valid — New no longer
+// returns ErrNoEndpoint. Such a Manager cannot register but can resolve.
+func TestNew_EnabledConsumerOnlySucceeds(t *testing.T) {
 	t.Parallel()
 
-	_, err := New(Config{Enabled: true, ConsulAddr: "localhost:8500"})
+	stub := &stubRegistry{resolveResult: Service{Address: "10.0.0.7", Port: 8090}}
+
+	m, err := New(Config{
+		Enabled:    true,
+		ConsulAddr: "localhost:8500",
+		Logger:     log.NewNop(),
+	}, WithRegistry(stub))
+	require.NoError(t, err)
+	require.NotNil(t, m)
+
+	t.Cleanup(func() { _ = m.Close() })
+
+	// A consumer-only Manager still resolves.
+	addr, err := m.Resolve(context.Background(), "svc-b", "")
+	require.NoError(t, err)
+	assert.Equal(t, "10.0.0.7:8090", addr)
+}
+
+// TestRegister_NoEndpointErrors verifies the advertise requirement moved from
+// Validate/New into Register: a consumer-only Manager (no advertise address) that
+// tries to register a Service with no endpoint of its own returns ErrNoEndpoint.
+func TestRegister_NoEndpointErrors(t *testing.T) {
+	t.Parallel()
+
+	registered := false
+
+	m, err := New(Config{
+		Enabled:    true,
+		ConsulAddr: "localhost:8500",
+		Logger:     log.NewNop(),
+	}, WithRegistry(&captureRegistry{onRegister: func(Service) { registered = true }}))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = m.Close() })
+
+	err = m.Register(context.Background(), Service{Name: "svc-a"})
+	assert.ErrorIs(t, err, ErrNoEndpoint)
+	assert.False(t, registered, "registry must not be called when there is no endpoint")
+}
+
+// TestRegister_WithServicePortStillNeedsAdvertise verifies that a caller-supplied
+// flat Port alone (no advertise address in config, no endpoint address) is not a
+// registrable endpoint: Register still returns ErrNoEndpoint.
+func TestRegister_WithServicePortStillNeedsAdvertise(t *testing.T) {
+	t.Parallel()
+
+	m, err := New(Config{
+		Enabled:    true,
+		ConsulAddr: "localhost:8500",
+		Logger:     log.NewNop(),
+	}, WithRegistry(&captureRegistry{}))
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = m.Close() })
+
+	err = m.Register(context.Background(), Service{Name: "svc-a", Port: 8081})
 	assert.ErrorIs(t, err, ErrNoEndpoint)
 }
 
