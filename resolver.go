@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/LerianStudio/lib-observability/log"
-	obsruntime "github.com/LerianStudio/lib-observability/runtime"
+	"github.com/LerianStudio/lib-observability/v2/log"
+	obsruntime "github.com/LerianStudio/lib-observability/v2/runtime"
 )
 
 // DynamicResolver keeps a service's address fresh. It seeds an initial value via

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/log"
-	obsruntime "github.com/LerianStudio/lib-observability/runtime"
+	"github.com/LerianStudio/lib-observability/v2/log"
+	obsruntime "github.com/LerianStudio/lib-observability/v2/runtime"
 )
 
 // Manager is the entry point for lib-service-discovery.

@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/log"
-	libsd "github.com/LerianStudio/lib-service-discovery"
+	"github.com/LerianStudio/lib-observability/v2/log"
+	libsd "github.com/LerianStudio/lib-service-discovery/v2"
 )
 
 func main() {
