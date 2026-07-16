@@ -72,14 +72,14 @@ type Manager struct {
 type Option func(*Manager)
 
 // WithLogger sets the structured logger used by the Manager and its registry.
-// A nil logger is silently ignored; the Config.Logger (or log.NewNop()) is used instead.
-func WithLogger(l log.Logger) Option {
+// A nil logger is silently ignored; the Config.Logger (or a no-op logger) is used instead.
+func WithLogger(l Logger) Option {
 	return func(m *Manager) {
 		if m == nil || l == nil {
 			return
 		}
 
-		m.logger = l
+		m.logger = toInternalLogger(l)
 	}
 }
 
@@ -125,7 +125,7 @@ func New(cfg Config, opts ...Option) (*Manager, error) {
 
 	m := &Manager{
 		config:      cfg,
-		logger:      cfg.Logger,
+		logger:      toInternalLogger(cfg.Logger),
 		workload:    cfg.Workload,
 		preferView:  cfg.PreferView,
 		seedTimeout: cfg.SeedTimeout,

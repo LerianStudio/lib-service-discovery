@@ -8,29 +8,29 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/LerianStudio/lib-observability/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// captureLogger is a log.Logger that records every Log call, so tests can assert
-// that a specific message (e.g. the internal-view degrade warning) was emitted.
+// captureLogger is a Logger that records every message logged, so tests can
+// assert that a specific message (e.g. the internal-view degrade warning) was
+// emitted.
 type captureLogger struct {
 	mu   sync.Mutex
 	msgs []string
 }
 
-func (c *captureLogger) Log(_ context.Context, _ log.Level, msg string, _ ...log.Field) {
+func (c *captureLogger) record(msg string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.msgs = append(c.msgs, msg)
 }
 
-func (c *captureLogger) With(_ ...log.Field) log.Logger { return c }
-func (c *captureLogger) WithGroup(_ string) log.Logger  { return c }
-func (c *captureLogger) Enabled(_ log.Level) bool       { return true }
-func (c *captureLogger) Sync(_ context.Context) error   { return nil }
+func (c *captureLogger) InfoContext(_ context.Context, msg string, _ ...any)  { c.record(msg) }
+func (c *captureLogger) WarnContext(_ context.Context, msg string, _ ...any)  { c.record(msg) }
+func (c *captureLogger) ErrorContext(_ context.Context, msg string, _ ...any) { c.record(msg) }
+func (c *captureLogger) DebugContext(_ context.Context, msg string, _ ...any) { c.record(msg) }
 
 func (c *captureLogger) has(msg string) bool {
 	c.mu.Lock()
@@ -80,7 +80,7 @@ func enabledManager(t *testing.T, reg Registry) *Manager {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        log.NewNop(),
+		Logger:        NewNopLogger(),
 	}, WithRegistry(reg))
 	require.NoError(t, err)
 
@@ -111,7 +111,7 @@ func TestNew_EnabledConsumerOnlySucceeds(t *testing.T) {
 	m, err := New(Config{
 		Enabled:    true,
 		ConsulAddr: "localhost:8500",
-		Logger:     log.NewNop(),
+		Logger:     NewNopLogger(),
 	}, WithRegistry(stub))
 	require.NoError(t, err)
 	require.NotNil(t, m)
@@ -135,7 +135,7 @@ func TestRegister_NoEndpointErrors(t *testing.T) {
 	m, err := New(Config{
 		Enabled:    true,
 		ConsulAddr: "localhost:8500",
-		Logger:     log.NewNop(),
+		Logger:     NewNopLogger(),
 	}, WithRegistry(&captureRegistry{onRegister: func(Service) { registered = true }}))
 	require.NoError(t, err)
 
@@ -155,7 +155,7 @@ func TestRegister_WithServicePortStillNeedsAdvertise(t *testing.T) {
 	m, err := New(Config{
 		Enabled:    true,
 		ConsulAddr: "localhost:8500",
-		Logger:     log.NewNop(),
+		Logger:     NewNopLogger(),
 	}, WithRegistry(&captureRegistry{}))
 	require.NoError(t, err)
 
@@ -184,7 +184,7 @@ func TestNew_WithRegistryOption(t *testing.T) {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        log.NewNop(),
+		Logger:        NewNopLogger(),
 	}, WithRegistry(stub))
 	require.NoError(t, err)
 	assert.Equal(t, stub, m.registry)
@@ -201,11 +201,16 @@ func TestNew_WithRegistryNilIsIgnored(t *testing.T) {
 func TestNew_WithLoggerOption(t *testing.T) {
 	t.Parallel()
 
-	nop := log.NewNop()
+	nop := NewNopLogger()
 
 	m, err := New(Config{Enabled: false}, WithLogger(nop))
 	require.NoError(t, err)
-	assert.Equal(t, nop, m.logger)
+
+	// WithLogger wraps the public Logger in the internal adapter, so the Manager's
+	// internal logger is the adapter carrying the supplied Logger.
+	adapter, ok := m.logger.(*observabilityAdapter)
+	require.True(t, ok, "expected internal logger to be an *observabilityAdapter")
+	assert.Equal(t, nop, adapter.inner)
 }
 
 func TestNew_NilOptionIsIgnored(t *testing.T) {
@@ -952,7 +957,7 @@ func TestResolvePreferredEndpoint(t *testing.T) {
 				ConsulAddr:    "localhost:8500",
 				AdvertiseAddr: "127.0.0.1",
 				PreferView:    tt.preferView,
-				Logger:        log.NewNop(),
+				Logger:        NewNopLogger(),
 			}, WithRegistry(&stubRegistry{resolveResult: tt.resolveRes}))
 			require.NoError(t, err)
 
@@ -984,7 +989,7 @@ func internalOnlyManager(t *testing.T, onRegister func(Service)) *Manager {
 		AdvertiseInternalAddr:   "svc.ns.svc.cluster.local",
 		AdvertiseInternalPort:   9090,
 		AdvertiseInternalScheme: "http",
-		Logger:                  log.NewNop(),
+		Logger:                  NewNopLogger(),
 	}, WithRegistry(&captureRegistry{onRegister: onRegister}))
 	require.NoError(t, err)
 
@@ -1214,7 +1219,7 @@ func TestResolvePreferredURL(t *testing.T) {
 			ConsulAddr:    "localhost:8500",
 			AdvertiseAddr: "127.0.0.1",
 			PreferView:    view,
-			Logger:        log.NewNop(),
+			Logger:        NewNopLogger(),
 		}, WithRegistry(&stubRegistry{resolveResult: intSvc}))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = m.Close() })

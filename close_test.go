@@ -210,7 +210,7 @@ func TestManagerClose_RegistryWithoutCloser(t *testing.T) {
 func TestManagerClose_DisabledManagerSafe(t *testing.T) {
 	t.Parallel()
 
-	m, err := New(Config{Enabled: false, Logger: log.NewNop()})
+	m, err := New(Config{Enabled: false, Logger: NewNopLogger()})
 	require.NoError(t, err)
 
 	assert.NotPanics(t, func() {

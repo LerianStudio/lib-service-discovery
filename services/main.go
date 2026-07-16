@@ -19,13 +19,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/log"
 	libsd "github.com/LerianStudio/lib-service-discovery"
 )
 
@@ -38,14 +38,17 @@ func main() {
 	// and callers resolving its internal endpoint could not reach it.
 	listen := ":" + getenv("SD_ADVERTISE_PORT", getenv("SD_INTERNAL_PORT", "8080"))
 
-	logger := &log.GoLogger{Level: log.LevelDebug}
+	// lib-service-discovery accepts any structured logger implementing the
+	// minimal libsd.Logger interface, so the stdlib *slog.Logger works directly
+	// with no lib-observability dependency or adapter required.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx := context.Background()
 
 	cfg := libsd.ConfigFromEnv()
 
 	sd, err := libsd.New(cfg, libsd.WithLogger(logger))
 	if err != nil {
-		logger.Log(ctx, log.LevelError, "init service discovery", log.Err(err))
+		logger.ErrorContext(ctx, "init service discovery", "error", err)
 		os.Exit(1)
 	}
 
@@ -74,8 +77,8 @@ func main() {
 	if next != "" {
 		resolver, err = sd.WatchResolve(ctx, next, "" /* fallback */)
 		if err != nil {
-			logger.Log(ctx, log.LevelError, "start dynamic resolver",
-				log.String("next", next), log.Err(err))
+			logger.ErrorContext(ctx, "start dynamic resolver",
+				"next", next, "error", err)
 		}
 	}
 
@@ -129,14 +132,14 @@ func main() {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Log(ctx, log.LevelError, "http server", log.Err(err))
+			logger.ErrorContext(ctx, "http server", "error", err)
 		}
 	}()
 
-	logger.Log(ctx, log.LevelInfo, "demo service up",
-		log.String("name", name),
-		log.String("listen", listen),
-		log.String("next", next))
+	logger.InfoContext(ctx, "demo service up",
+		"name", name,
+		"listen", listen,
+		"next", next)
 
 	// Graceful shutdown: deregister so the instance leaves the catalog cleanly.
 	stop := make(chan os.Signal, 1)

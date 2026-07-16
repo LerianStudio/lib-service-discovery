@@ -67,11 +67,16 @@ stopped by `Manager.Close()`.
 - `Manager` — entry point; created with `New(cfg, opts...)`.
 - `Registry` — interface for the Consul backend; can be replaced by an in-memory stub in tests.
 - `Service` / `HealthCheck` / `Event` — domain types.
+- `Logger` — minimal structured-logging interface the library needs. It mirrors
+  the context-aware methods of the stdlib `*slog.Logger`
+  (`InfoContext`/`WarnContext`/`ErrorContext`/`DebugContext`), so any structured
+  logger can be injected without coupling the consumer to a specific
+  lib-observability version. Use `libsd.NewNopLogger()` to disable logging.
 
 **Functional options:**
 
 ```go
-libsd.WithLogger(logger)   // inject a lib-commons log.Logger
+libsd.WithLogger(logger)   // inject any logger implementing libsd.Logger (e.g. *slog.Logger)
 ```
 
 ## Usage

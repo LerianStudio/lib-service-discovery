@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +41,7 @@ func integrationManagerDual(t *testing.T, internalPort int, preferView EndpointV
 		AdvertiseInternalAddr: advertiseAddr, // internal view — real/reachable (host.docker.internal)
 		AdvertiseInternalPort: internalPort,
 		PreferView:            preferView,
-		Logger:                log.NewNop(),
+		Logger:                NewNopLogger(),
 	})
 	require.NoError(t, err)
 
@@ -271,7 +270,7 @@ func integrationManagerInternalOnly(t *testing.T, internalPort int) *Manager {
 		AdvertiseInternalAddr: advertiseAddr, // internal view — real/reachable
 		AdvertiseInternalPort: internalPort,
 		// AdvertiseAddr intentionally empty: no external endpoint is advertised.
-		Logger: log.NewNop(),
+		Logger: NewNopLogger(),
 	})
 	require.NoError(t, err)
 
