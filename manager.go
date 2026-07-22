@@ -72,14 +72,15 @@ type Manager struct {
 type Option func(*Manager)
 
 // WithLogger sets the structured logger used by the Manager and its registry.
-// A nil logger is silently ignored; the Config.Logger (or log.NewNop()) is used instead.
-func WithLogger(l log.Logger) Option {
+// It accepts any slog-compatible libsd.Logger (e.g. *slog.Logger). A nil logger
+// is silently ignored; the Config.Logger (or a silent no-op) is used instead.
+func WithLogger(l Logger) Option {
 	return func(m *Manager) {
 		if m == nil || l == nil {
 			return
 		}
 
-		m.logger = l
+		m.logger = toObsLogger(l)
 	}
 }
 
@@ -125,7 +126,7 @@ func New(cfg Config, opts ...Option) (*Manager, error) {
 
 	m := &Manager{
 		config:      cfg,
-		logger:      cfg.Logger,
+		logger:      toObsLogger(cfg.Logger),
 		workload:    cfg.Workload,
 		preferView:  cfg.PreferView,
 		seedTimeout: cfg.SeedTimeout,
