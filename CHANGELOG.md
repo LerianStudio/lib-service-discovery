@@ -149,6 +149,18 @@ Improvements:
   but no endpoint (external or internal) is configured.
 
 ### Changed
+- **BREAKING — public logger decoupled from lib-observability (#24)**:
+  `Config.Logger` and `WithLogger()` now take the new stdlib-only
+  `libsd.Logger` interface (`InfoContext`/`WarnContext`/`ErrorContext`/
+  `DebugContext(ctx, msg, ...any)`) instead of lib-observability's
+  `log.Logger`. Any `slog`-compatible logger — including the stdlib
+  `*slog.Logger` (e.g. `slog.Default()`) — satisfies it directly.
+  **Migration**: replace the `log.Logger` you pass to `WithLogger()` /
+  `Config.Logger` with a `*slog.Logger`. Consumers no longer need
+  lib-observability as a direct dependency, and no adapter wrapper is
+  required on the caller side. (lib-observability remains an internal
+  implementation detail of this lib via a private adapter and is not part
+  of the public API.)
 - **BREAKING — `Service.EndpointFor` signature**: now returns `(Endpoint, error)`
   instead of a single `Endpoint`. Callers must handle the error
   (`ErrEndpointViewUnavailable`).
