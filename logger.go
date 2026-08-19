@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/LerianStudio/lib-observability/log"
+	"github.com/LerianStudio/lib-observability/v2/log"
 )
 
 // Logger is the minimal, version-agnostic structured-logging contract that

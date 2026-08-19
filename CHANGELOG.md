@@ -112,6 +112,21 @@ Improvements:
   default `true`) preserves the stale-read semantics described above.
 
 ### Changed
+- **Internal observability dependency moved to `lib-observability/v2` (`v2.1.3`)**:
+  the private logging adapter (`logger.go`) and the `runtime.SafeGo` goroutine
+  guard used by the registry and resolvers now import the `/v2` module path,
+  replacing the retired `lib-observability v1.1.0` pin. **No public API change** —
+  `libsd.Logger`, `Config.Logger`, `WithLogger()` and every other exported symbol
+  are untouched, and lib-observability stays an internal implementation detail, so
+  consumers need no code change. What this fixes: because the public logger was
+  already decoupled (#24), a consumer on the current platform stack (lib-commons
+  v6 / lib-observability v2) still compiled against this lib, but this lib was the
+  sole reason a **second, retired copy** of lib-observability (`v1.1.0`) stayed in
+  their module graph next to `/v2` — confirmed on midaz via `go mod why`. Taking
+  this version drops that duplicate indirect dependency, unblocking the reporter
+  and fetcher migrations. The `log` and `runtime` package APIs are identical
+  between `v1.1.0` and `v2.1.3`; the `/v2` major was cut for a Fiber v3 migration
+  that this lib does not use.
 - **`AllowStale` now defaults to `true`** (stale reads). The field type changed
   from `bool` to `*bool` so the unset state (nil → default true) is
   distinguishable from an explicit `false`. Resolution now stays available during
