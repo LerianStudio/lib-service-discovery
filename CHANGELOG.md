@@ -112,6 +112,21 @@ Improvements:
   default `true`) preserves the stale-read semantics described above.
 
 ### Changed
+- **Internal observability dependency moved to `lib-observability/v2` (`v2.1.3`)**:
+  the private logging adapter (`logger.go`) and the `runtime.SafeGo` goroutine
+  guard used by the registry and resolvers now import the `/v2` module path,
+  replacing the retired `lib-observability v1.1.0` pin. This entry covers only
+  the internal dependency migration; the incompatible change to `Config.Logger`
+  and `WithLogger()` is documented in the **BREAKING** entry below and applies
+  to every v1 consumer upgrading to v2. What this fixes: because the public logger was
+  already decoupled (#24), a consumer on the current platform stack (lib-commons
+  v6 / lib-observability v2) still compiled against this lib, but this lib was the
+  sole reason a **second, retired copy** of lib-observability (`v1.1.0`) stayed in
+  their module graph next to `/v2` — confirmed on midaz via `go mod why`. Taking
+  this version drops that duplicate indirect dependency, unblocking the reporter
+  and fetcher migrations. The `log` and `runtime` package APIs are identical
+  between `v1.1.0` and `v2.1.3`; the `/v2` major was cut for a Fiber v3 migration
+  that this lib does not use.
 - **`AllowStale` now defaults to `true`** (stale reads). The field type changed
   from `bool` to `*bool` so the unset state (nil → default true) is
   distinguishable from an explicit `false`. Resolution now stays available during
@@ -149,6 +164,18 @@ Improvements:
   but no endpoint (external or internal) is configured.
 
 ### Changed
+- **BREAKING — public logger decoupled from lib-observability (#24)**:
+  `Config.Logger` and `WithLogger()` now take the new stdlib-only
+  `libsd.Logger` interface (`InfoContext`/`WarnContext`/`ErrorContext`/
+  `DebugContext(ctx, msg, ...any)`) instead of lib-observability's
+  `log.Logger`. Any `slog`-compatible logger — including the stdlib
+  `*slog.Logger` (e.g. `slog.Default()`) — satisfies it directly.
+  **Migration**: replace the `log.Logger` you pass to `WithLogger()` /
+  `Config.Logger` with a `*slog.Logger`. Consumers no longer need
+  lib-observability as a direct dependency, and no adapter wrapper is
+  required on the caller side. (lib-observability remains an internal
+  implementation detail of this lib via a private adapter and is not part
+  of the public API.)
 - **BREAKING — `Service.EndpointFor` signature**: now returns `(Endpoint, error)`
   instead of a single `Endpoint`. Callers must handle the error
   (`ErrEndpointViewUnavailable`).

@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/LerianStudio/lib-observability/log"
 )
 
 const (
@@ -171,8 +169,9 @@ type Config struct {
 	AllowStale *bool
 
 	// Logger receives structured log output from the Manager and registry.
-	// Defaults to log.NewNop() when nil.
-	Logger log.Logger
+	// It is a version-agnostic, slog-compatible interface (see libsd.Logger):
+	// pass any *slog.Logger or equivalent directly. A nil Logger silences output.
+	Logger Logger
 }
 
 // ConfigFromEnv returns a Config populated from environment variables.
@@ -250,10 +249,6 @@ func (c Config) Validate() error {
 }
 
 func (c Config) withDefaults() Config {
-	if c.Logger == nil {
-		c.Logger = log.NewNop()
-	}
-
 	if c.ConsulAddr == "" {
 		c.ConsulAddr = "localhost:8500"
 	}

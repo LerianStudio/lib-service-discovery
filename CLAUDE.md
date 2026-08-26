@@ -4,14 +4,17 @@ This file provides repository-specific guidance for coding agents working on `li
 
 ## Project snapshot
 
-- Module: `github.com/LerianStudio/lib-service-discovery`
+- Module: `github.com/LerianStudio/lib-service-discovery/v2` (the `/v2` suffix is
+  mandatory for the v2 major line; self-imports inside the module must carry it too)
 - Language: Go
 - Go version: `1.26` (see `go.mod`)
-- Library dependency: `github.com/LerianStudio/lib-commons/v5` (local replace directive)
+- Lerian library dependency: `github.com/LerianStudio/lib-observability/v2` (internal only — the
+  private logger adapter in `logger.go` and `runtime.SafeGo`). There is **no** lib-commons
+  dependency and **no** replace directive; do not add either without a reason.
 
 ## Primary objective for changes
 
-- Follow the same patterns as `lib-commons/v5` (the reference implementation for all Lerian Go libraries).
+- Follow the same patterns as `lib-commons/v6` (the reference implementation for all Lerian Go libraries).
 - Keep the public API nil-safe and concurrency-safe by default.
 - Prefer explicit error returns over panics.
 
@@ -32,7 +35,7 @@ lib-service-discovery/
 
 ## Coding standards
 
-All standards mirror `lib-commons/v5`:
+All standards mirror `lib-commons/v6`:
 
 1. **`types.go`** holds all exported types: errors (`var Err* = errors.New(...)`), the `Registry`
    interface, and domain models (`Service`, `HealthCheck`, `Event`, `EventType`).
@@ -40,7 +43,8 @@ All standards mirror `lib-commons/v5`:
 3. **`manager.go`** declares `Manager`, `Option`, `New()`, and all exported methods.
 4. **Nil-receiver guards** — every exported method checks `if m == nil { return ErrNilManager }`.
 5. **Functional options** — `type Option func(*Manager)`; guard nil receiver and nil value inside each option.
-6. **Structured logging** — use `log.Logger` from lib-commons; never `fmt.Sprintf` inside a log call;
+6. **Structured logging** — internally, use `log.Logger` from `lib-observability/v2/log` (lib-commons
+   has held no `log` package since v5); never `fmt.Sprintf` inside a log call;
    use `log.String`, `log.Err`, `log.Int`, `log.Bool`.
 7. **Sentinel errors** — defined in `types.go`; callers use `errors.Is()`.
 8. **Context first** — all blocking methods take `ctx context.Context` as first parameter.
