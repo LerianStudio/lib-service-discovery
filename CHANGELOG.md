@@ -1,5 +1,23 @@
 # Lib-service-discovery Changelog
 
+## [2.0.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v2.0.0)
+
+Features:
+- Decoupled the public logger from `lib-observability`, marking a breaking change in the logging system. (@gandalf-at-lerian)
+
+Fixes:
+- Updated core to use `reflect.Pointer` instead of the deprecated `reflect.Ptr` alias. (@fredcamaral)
+- Adjusted core to treat typed-nil loggers as nil in `WithLogger` and `toObsLogger` functions. (@fredcamaral)
+- Declared the `/v2` module path as required by the `v2` major line. (@fredcamaral)
+
+Improvements:
+- Corrected stale dependency guidance in `CLAUDE.md` documentation. (@fredcamaral)
+- Moved internal observability dependency to `lib-observability/v2`. (@fredcamaral)
+
+[Compare changes](https://github.com/LerianStudio/lib-service-discovery/compare/v1.1.0...v2.0.0)
+
+---
+
 ## [1.1.0](https://github.com/LerianStudio/lib-service-discovery/releases/tag/v1.1.0)
 
 Features:
