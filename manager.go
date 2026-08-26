@@ -76,7 +76,7 @@ type Option func(*Manager)
 // is silently ignored; the Config.Logger (or a silent no-op) is used instead.
 func WithLogger(l Logger) Option {
 	return func(m *Manager) {
-		if m == nil || l == nil {
+		if m == nil || isNilLogger(l) {
 			return
 		}
 

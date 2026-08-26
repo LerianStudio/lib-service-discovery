@@ -2,6 +2,7 @@ package libsd
 
 import (
 	"context"
+	"reflect"
 	"strings"
 
 	"github.com/LerianStudio/lib-observability/v2/log"
@@ -35,8 +36,25 @@ type obsLoggerAdapter struct {
 // toObsLogger wraps a public libsd.Logger as an internal log.Logger. A nil
 // logger yields the lib-observability no-op logger, preserving the prior
 // "nil logger is silent" behaviour.
-func toObsLogger(l Logger) log.Logger {
+// isNilLogger reports whether l is nil, including a typed nil (e.g. a nil
+// *slog.Logger stored in the interface), which l == nil alone cannot catch
+// and which would panic inside slog on the first log call.
+func isNilLogger(l Logger) bool {
 	if l == nil {
+		return true
+	}
+
+	v := reflect.ValueOf(l)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Func, reflect.Chan, reflect.Slice, reflect.Interface:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+func toObsLogger(l Logger) log.Logger {
+	if isNilLogger(l) {
 		return log.NewNop()
 	}
 
