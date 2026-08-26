@@ -1,4 +1,4 @@
-module github.com/LerianStudio/lib-service-discovery
+module github.com/LerianStudio/lib-service-discovery/v2
 
 go 1.26.3
 
