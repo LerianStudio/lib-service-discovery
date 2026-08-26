@@ -4,6 +4,7 @@ package libsd
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/LerianStudio/lib-observability/v2/log"
@@ -93,4 +94,33 @@ func TestObsLoggerAdapter_WithAndWithGroup(t *testing.T) {
 	assert.Equal(t, []any{"base", "b", "grp.k", "v"}, rec.args)
 	assert.True(t, l.Enabled(log.LevelDebug))
 	assert.NoError(t, l.Sync(context.Background()))
+}
+
+// A typed-nil *slog.Logger stored in the Logger interface is not caught by a
+// plain == nil check; without a kind-aware guard the adapter wraps it and the
+// first log call panics inside slog. Both entry points must treat it as nil.
+func TestToObsLogger_TypedNilYieldsNop(t *testing.T) {
+	t.Parallel()
+
+	var sl *slog.Logger
+
+	l := toObsLogger(sl)
+	require.NotNil(t, l)
+
+	assert.NotPanics(t, func() {
+		l.Log(context.Background(), log.LevelInfo, "probe")
+	})
+}
+
+func TestWithLogger_TypedNilKeepsConfiguredLogger(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingLogger{}
+	m := &Manager{logger: toObsLogger(rec)}
+
+	var sl *slog.Logger
+	WithLogger(sl)(m)
+
+	m.logger.Log(context.Background(), log.LevelInfo, "still recording")
+	assert.Equal(t, "still recording", rec.msg, "typed-nil WithLogger must not replace the configured logger")
 }

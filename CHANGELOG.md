@@ -115,10 +115,10 @@ Improvements:
 - **Internal observability dependency moved to `lib-observability/v2` (`v2.1.3`)**:
   the private logging adapter (`logger.go`) and the `runtime.SafeGo` goroutine
   guard used by the registry and resolvers now import the `/v2` module path,
-  replacing the retired `lib-observability v1.1.0` pin. **No public API change** —
-  `libsd.Logger`, `Config.Logger`, `WithLogger()` and every other exported symbol
-  are untouched, and lib-observability stays an internal implementation detail, so
-  consumers need no code change. What this fixes: because the public logger was
+  replacing the retired `lib-observability v1.1.0` pin. This entry covers only
+  the internal dependency migration; the incompatible change to `Config.Logger`
+  and `WithLogger()` is documented in the **BREAKING** entry below and applies
+  to every v1 consumer upgrading to v2. What this fixes: because the public logger was
   already decoupled (#24), a consumer on the current platform stack (lib-commons
   v6 / lib-observability v2) still compiled against this lib, but this lib was the
   sole reason a **second, retired copy** of lib-observability (`v1.1.0`) stayed in
