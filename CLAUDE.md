@@ -4,7 +4,8 @@ This file provides repository-specific guidance for coding agents working on `li
 
 ## Project snapshot
 
-- Module: `github.com/LerianStudio/lib-service-discovery`
+- Module: `github.com/LerianStudio/lib-service-discovery/v2` (the `/v2` suffix is
+  mandatory for the v2 major line; self-imports inside the module must carry it too)
 - Language: Go
 - Go version: `1.26` (see `go.mod`)
 - Lerian library dependency: `github.com/LerianStudio/lib-observability/v2` (internal only — the

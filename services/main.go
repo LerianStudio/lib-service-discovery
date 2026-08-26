@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"time"
 
-	libsd "github.com/LerianStudio/lib-service-discovery"
+	libsd "github.com/LerianStudio/lib-service-discovery/v2"
 )
 
 func main() {

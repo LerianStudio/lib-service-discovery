@@ -10,8 +10,12 @@ Service discovery library (`lib-service-discovery`) backed by HashiCorp Consul, 
 ## Installation
 
 ```bash
-go get github.com/LerianStudio/lib-service-discovery
+go get github.com/LerianStudio/lib-service-discovery/v2
 ```
+
+The import path carries the major version, so `v2` consumers import
+`github.com/LerianStudio/lib-service-discovery/v2`. The `v1` line stays on the
+unsuffixed path.
 
 ## Breaking changes (v1.0.0)
 
