@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/v2/log"
-	obsruntime "github.com/LerianStudio/lib-observability/v2/runtime"
+	"github.com/LerianStudio/lib-observability/v4/log"
+	obsruntime "github.com/LerianStudio/lib-observability/v4/runtime"
 	"github.com/hashicorp/consul/api"
 )
 
@@ -55,7 +55,7 @@ type consulRegistry struct {
 	// withholds headers until the catalog index advances (up to watchWaitTime), so
 	// a response-header deadline would abort healthy long-polls.
 	watchClient *api.Client
-	logger      log.Logger
+	logger      Logger
 
 	// allowStale opts catalog reads (Resolve/Watch) into Consul stale mode via
 	// QueryOptions.AllowStale. Derived from Config.AllowStale (a *bool, resolved to
@@ -143,10 +143,8 @@ func newTunedConfig(c Config, fast bool) *api.Config {
 	return cfg
 }
 
-func newConsulRegistry(c Config, logger log.Logger) (Registry, error) {
-	if logger == nil {
-		logger = log.NewNop()
-	}
+func newConsulRegistry(c Config, logger Logger) (Registry, error) {
+	logger = orNop(logger)
 
 	client, err := api.NewClient(newTunedConfig(c, true))
 	if err != nil {

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/v2/log"
-	obsruntime "github.com/LerianStudio/lib-observability/v2/runtime"
+	"github.com/LerianStudio/lib-observability/v4/log"
+	obsruntime "github.com/LerianStudio/lib-observability/v4/runtime"
 )
 
 // Manager is the entry point for lib-service-discovery.
@@ -26,7 +26,7 @@ import (
 type Manager struct {
 	config   Config
 	registry Registry
-	logger   log.Logger
+	logger   Logger
 	workload string
 	// seedTimeout bounds both the DynamicResolver's initial (seed) resolve and the
 	// managed resolvers' lazy seed. Sourced from Config.SeedTimeout (defaulted by
@@ -72,15 +72,17 @@ type Manager struct {
 type Option func(*Manager)
 
 // WithLogger sets the structured logger used by the Manager and its registry.
-// It accepts any slog-compatible libsd.Logger (e.g. *slog.Logger). A nil logger
-// is silently ignored; the Config.Logger (or a silent no-op) is used instead.
+// It accepts any libsd.Logger — a lib-observability logger, a lib-commons
+// obs.Logger, or a type the consumer declared itself. A nil logger (including a
+// typed nil) is silently ignored; the Config.Logger, or a silent no-op, is used
+// instead.
 func WithLogger(l Logger) Option {
 	return func(m *Manager) {
 		if m == nil || isNilLogger(l) {
 			return
 		}
 
-		m.logger = toObsLogger(l)
+		m.logger = l
 	}
 }
 
@@ -126,7 +128,7 @@ func New(cfg Config, opts ...Option) (*Manager, error) {
 
 	m := &Manager{
 		config:      cfg,
-		logger:      toObsLogger(cfg.Logger),
+		logger:      orNop(cfg.Logger),
 		workload:    cfg.Workload,
 		preferView:  cfg.PreferView,
 		seedTimeout: cfg.SeedTimeout,

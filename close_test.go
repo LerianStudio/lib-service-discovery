@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LerianStudio/lib-observability/v2/log"
+	"github.com/LerianStudio/lib-observability/v4/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -210,7 +210,7 @@ func TestManagerClose_RegistryWithoutCloser(t *testing.T) {
 func TestManagerClose_DisabledManagerSafe(t *testing.T) {
 	t.Parallel()
 
-	m, err := New(Config{Enabled: false, Logger: nopLogger()})
+	m, err := New(Config{Enabled: false, Logger: discardLogger()})
 	require.NoError(t, err)
 
 	assert.NotPanics(t, func() {

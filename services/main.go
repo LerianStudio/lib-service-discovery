@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"syscall"
 	"time"
 
@@ -38,14 +39,17 @@ func main() {
 	// and callers resolving its internal endpoint could not reach it.
 	listen := ":" + getenv("SD_ADVERTISE_PORT", getenv("SD_INTERNAL_PORT", "8080"))
 
-	// Any slog-compatible logger satisfies libsd.Logger — no lib-observability
-	// dependency required on the consumer side.
+	// libsd.Logger is built from stdlib types only, so a consumer can satisfy it
+	// with a type it declares itself — slogLogger below imports nothing from any
+	// observability library. A lib-observability v4 logger would be accepted just
+	// as directly, with no adapter.
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	sdLogger := slogLogger{l: logger}
 	ctx := context.Background()
 
 	cfg := libsd.ConfigFromEnv()
 
-	sd, err := libsd.New(cfg, libsd.WithLogger(logger))
+	sd, err := libsd.New(cfg, libsd.WithLogger(sdLogger))
 	if err != nil {
 		logger.ErrorContext(ctx, "init service discovery", "error", err)
 		os.Exit(1)
@@ -163,4 +167,91 @@ func getenv(key, def string) string {
 	}
 
 	return def
+}
+
+// slogLogger adapts a *slog.Logger to libsd.Logger.
+//
+// It is declared here, in the consumer, and imports nothing from
+// lib-observability. That is the whole point of the libsd.Logger contract: it
+// names only stdlib types, so any package can satisfy it without inheriting a
+// versioned dependency — and without waiting on a major bump anywhere.
+type slogLogger struct{ l *slog.Logger }
+
+func (s slogLogger) Log(ctx context.Context, level int, msg string, fields ...any) {
+	s.l.Log(ctx, slogLevel(level), msg, slogArgs(fields)...)
+}
+
+func (s slogLogger) Enabled(level int) bool {
+	return s.l.Enabled(context.Background(), slogLevel(level))
+}
+
+// Sync is a no-op: slog handlers flush on write.
+func (s slogLogger) Sync(context.Context) error { return nil }
+
+// slogLevel maps the libsd severity scale (Error=0 .. Debug=3, lower is more
+// severe) onto slog's, which runs the other way (Debug=-4 .. Error=8).
+func slogLevel(level int) slog.Level {
+	switch level {
+	case libsd.LevelError:
+		return slog.LevelError
+	case libsd.LevelWarn:
+		return slog.LevelWarn
+	case libsd.LevelDebug:
+		return slog.LevelDebug
+	case libsd.LevelInfo:
+		return slog.LevelInfo
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// slogArgs flattens the fields variadic into slog key/value pairs.
+//
+// The library emits lib-observability log.Field values (a struct with exported
+// Key and Value). This consumer will not import that module just to name the
+// type, so it recognizes the SHAPE by reflection instead — which also accepts
+// the equivalent field type of any other logging library. Anything else is
+// passed through untouched, so plain alternating key/value pairs work too.
+func slogArgs(fields []any) []any {
+	out := make([]any, 0, len(fields)*2)
+
+	for _, f := range fields {
+		out = appendField(out, reflect.ValueOf(f))
+	}
+
+	return out
+}
+
+func appendField(out []any, v reflect.Value) []any {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return append(out, nil)
+		}
+
+		v = v.Elem()
+	}
+
+	// A []Field arrives as ONE variadic element; flatten it in place.
+	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Struct {
+		for i := range v.Len() {
+			out = appendField(out, v.Index(i))
+		}
+
+		return out
+	}
+
+	if v.Kind() == reflect.Struct {
+		key := v.FieldByName("Key")
+		val := v.FieldByName("Value")
+
+		if key.Kind() == reflect.String && val.IsValid() && val.CanInterface() {
+			return append(out, key.String(), val.Interface())
+		}
+	}
+
+	if !v.IsValid() {
+		return append(out, nil)
+	}
+
+	return append(out, v.Interface())
 }

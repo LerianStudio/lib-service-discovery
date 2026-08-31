@@ -169,8 +169,10 @@ type Config struct {
 	AllowStale *bool
 
 	// Logger receives structured log output from the Manager and registry.
-	// It is a version-agnostic, slog-compatible interface (see libsd.Logger):
-	// pass any *slog.Logger or equivalent directly. A nil Logger silences output.
+	// It is a version-agnostic interface built from stdlib types only (see
+	// libsd.Logger and the obs package): pass a lib-observability logger, a
+	// lib-commons obs.Logger, or your own type directly — no adapter, and no
+	// observability dependency required. A nil Logger silences output.
 	Logger Logger
 }
 
