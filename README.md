@@ -71,21 +71,37 @@ stopped by `Manager.Close()`.
 - `Manager` — entry point; created with `New(cfg, opts...)`.
 - `Registry` — interface for the Consul backend; can be replaced by an in-memory stub in tests.
 - `Service` / `HealthCheck` / `Event` — domain types.
-- `Logger` — minimal, version-agnostic, `slog`-compatible logging interface. Pass any
-  `*slog.Logger` (or equivalent) directly; no `lib-observability` dependency required.
+- `Logger` — minimal, version-agnostic logging interface, aliased from the `obs`
+  subpackage. Built from stdlib types only, so a `lib-observability` logger, a
+  lib-commons `obs.Logger`, or a type you declare yourself all satisfy it directly
+  — with no adapter and no observability dependency on the consumer side.
 
 **Functional options:**
 
 ```go
-libsd.WithLogger(logger)   // inject any slog-compatible libsd.Logger (e.g. *slog.Logger)
+libsd.WithLogger(logger)   // inject any libsd.Logger; nil (or a typed nil) is ignored
 ```
 
-> **Breaking change (logger decoupling):** `Config.Logger` and `WithLogger()` now take
-> the stdlib-only `libsd.Logger` interface (`InfoContext`/`WarnContext`/`ErrorContext`/`DebugContext`)
-> instead of `lib-observability`'s `log.Logger`. Pass a `*slog.Logger` directly. A
-> `lib-observability` `log.Logger` no longer satisfies the API (it uses `Log(ctx, level, msg, ...Field)`),
-> so callers relying on it must switch to an `slog`-compatible logger. This removes the
-> version-pinning coupling on `lib-observability`.
+> **Breaking change (universal logger):** `Config.Logger` and `WithLogger()` take
+> `libsd.Logger`, an alias for `obs.Logger`:
+>
+> ```go
+> type Logger interface {
+>     Log(ctx context.Context, level int, msg string, fields ...any)
+>     Enabled(level int) bool
+>     Sync(ctx context.Context) error
+> }
+> ```
+>
+> Levels are `LevelError`=0, `LevelWarn`=1, `LevelInfo`=2, `LevelDebug`=3 — the
+> `lib-observability` scale, inverted from `log/slog`. This replaces the previous
+> `slog`-shaped contract (`InfoContext`/`WarnContext`/`ErrorContext`/`DebugContext`),
+> so a `*slog.Logger` no longer satisfies the API directly; see
+> [`MIGRATION-v3.md`](MIGRATION-v3.md) for the ~25-line consumer-side shim, and
+> `services/main.go` for a working one. In exchange, `lib-observability` v4 loggers
+> and lib-commons `obs.Logger` are now accepted with no adapter at all, and no
+> `lib-observability` type appears anywhere on this library'"'"'s public API — enforced
+> by `obs/boundary`.
 
 ## Usage
 
