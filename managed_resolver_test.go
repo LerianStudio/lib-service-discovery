@@ -159,7 +159,7 @@ func TestManagedResolver_CloseDuringInFlightSeedDoesNotLeak(t *testing.T) {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	}, WithRegistry(reg))
 	require.NoError(t, err)
 
@@ -238,7 +238,7 @@ func TestManagedResolver_ResolveAfterCloseDoesNotLeakWatcher(t *testing.T) {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	}, WithRegistry(reg))
 	require.NoError(t, err)
 
@@ -557,7 +557,7 @@ func TestManagedResolver_CloseStopsWatchers(t *testing.T) {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	}, WithRegistry(reg))
 	require.NoError(t, err)
 

@@ -41,7 +41,7 @@ func integrationManagerDual(t *testing.T, internalPort int, preferView EndpointV
 		AdvertiseInternalAddr: advertiseAddr, // internal view — real/reachable (host.docker.internal)
 		AdvertiseInternalPort: internalPort,
 		PreferView:            preferView,
-		Logger:                nopLogger(),
+		Logger:                discardLogger(),
 	})
 	require.NoError(t, err)
 
@@ -270,7 +270,7 @@ func integrationManagerInternalOnly(t *testing.T, internalPort int) *Manager {
 		AdvertiseInternalAddr: advertiseAddr, // internal view — real/reachable
 		AdvertiseInternalPort: internalPort,
 		// AdvertiseAddr intentionally empty: no external endpoint is advertised.
-		Logger: nopLogger(),
+		Logger: discardLogger(),
 	})
 	require.NoError(t, err)
 

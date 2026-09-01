@@ -4,123 +4,185 @@ package libsd
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 
-	"github.com/LerianStudio/lib-observability/v2/log"
+	"github.com/LerianStudio/lib-observability/v4/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// recordingLogger is a libsd.Logger that captures the level, message and args
-// of each call, so the adapter's level mapping and field translation can be
-// asserted.
+// recordingLogger is a libsd.Logger declared with stdlib types only — it names
+// nothing from lib-observability. That it compiles at all is part of what these
+// tests assert: the contract is satisfiable from a foreign package.
 type recordingLogger struct {
-	level string
-	msg   string
-	args  []any
+	calls  int
+	level  int
+	msg    string
+	fields []any
+	synced bool
 }
 
-func (r *recordingLogger) InfoContext(_ context.Context, msg string, args ...any) {
-	r.level, r.msg, r.args = "info", msg, args
+func (r *recordingLogger) Log(_ context.Context, level int, msg string, fields ...any) {
+	r.calls++
+	r.level, r.msg, r.fields = level, msg, fields
 }
 
-func (r *recordingLogger) WarnContext(_ context.Context, msg string, args ...any) {
-	r.level, r.msg, r.args = "warn", msg, args
+func (r *recordingLogger) Enabled(level int) bool { return level <= LevelInfo }
+
+func (r *recordingLogger) Sync(context.Context) error {
+	r.synced = true
+
+	return nil
 }
 
-func (r *recordingLogger) ErrorContext(_ context.Context, msg string, args ...any) {
-	r.level, r.msg, r.args = "error", msg, args
-}
+// ── The default when no logger is supplied ───────────────────────────────────
 
-func (r *recordingLogger) DebugContext(_ context.Context, msg string, args ...any) {
-	r.level, r.msg, r.args = "debug", msg, args
-}
-
-func TestToObsLogger_NilYieldsNop(t *testing.T) {
+func TestOrNop_NilYieldsSilentLogger(t *testing.T) {
 	t.Parallel()
 
-	// A nil public logger must produce a usable, silent internal logger.
-	got := toObsLogger(nil)
+	got := orNop(nil)
 	require.NotNil(t, got)
+
 	assert.NotPanics(t, func() {
-		got.Log(context.Background(), log.LevelInfo, "silent")
+		got.Log(context.Background(), LevelInfo, "silent", log.String("k", "v"))
+	})
+	assert.False(t, got.Enabled(LevelError), "the no-op logger reports nothing enabled")
+	assert.NoError(t, got.Sync(context.Background()))
+}
+
+// A typed-nil pointer stored in the Logger interface is not caught by a plain
+// == nil check; without a kind-aware guard it would be used and panic on the
+// first call.
+func TestOrNop_TypedNilYieldsSilentLogger(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *recordingLogger
+
+	got := orNop(typedNil)
+	require.NotNil(t, got)
+
+	assert.NotPanics(t, func() {
+		got.Log(context.Background(), LevelError, "probe")
 	})
 }
 
-func TestObsLoggerAdapter_LevelMapping(t *testing.T) {
+func TestOrNop_PassesLoggerThroughUnwrapped(t *testing.T) {
 	t.Parallel()
 
+	rec := &recordingLogger{}
+
+	// No adapter: the consumer's own value is what the library holds and calls.
+	assert.Same(t, rec, orNop(rec))
+}
+
+func TestIsNilLogger(t *testing.T) {
+	t.Parallel()
+
+	var typedNilPtr *recordingLogger
+
+	var typedNilSlice sliceLogger
+
 	cases := []struct {
-		level log.Level
-		want  string
+		name string
+		in   Logger
+		want bool
 	}{
-		{log.LevelError, "error"},
-		{log.LevelWarn, "warn"},
-		{log.LevelInfo, "info"},
-		{log.LevelDebug, "debug"},
-		{log.LevelUnknown, "info"}, // unknown levels default to info
+		{"untyped nil", nil, true},
+		{"typed nil pointer", typedNilPtr, true},
+		{"typed nil of a non-pointer kind", typedNilSlice, true},
+		{"non-nil pointer", &recordingLogger{}, false},
+		{"non-pointer value", nopLogger{}, false},
 	}
 
 	for _, tc := range cases {
-		rec := &recordingLogger{}
-		toObsLogger(rec).Log(context.Background(), tc.level, "msg")
-		assert.Equal(t, tc.want, rec.level, "level %v", tc.level)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, isNilLogger(tc.in))
+		})
 	}
 }
 
-func TestObsLoggerAdapter_FieldsBecomeSlogArgs(t *testing.T) {
+// sliceLogger is a Logger whose zero value is a nil slice: a typed nil that is
+// not a pointer, which the guard must still catch.
+type sliceLogger []string
+
+func (sliceLogger) Log(context.Context, int, string, ...any) {}
+
+func (sliceLogger) Enabled(int) bool { return false }
+
+func (sliceLogger) Sync(context.Context) error { return nil }
+
+// ── The levels the library emits ─────────────────────────────────────────────
+
+// The libsd level constants must stay numerically identical to
+// lib-observability's, or every severity the library emits is silently
+// mislabelled at the consumer.
+func TestLevels_MatchLibObservabilityScale(t *testing.T) {
 	t.Parallel()
 
-	rec := &recordingLogger{}
-	toObsLogger(rec).Log(context.Background(), log.LevelInfo, "resolved",
-		log.String("service", "svc-a"), log.Int("count", 3))
-
-	assert.Equal(t, "resolved", rec.msg)
-	assert.Equal(t, []any{"service", "svc-a", "count", 3}, rec.args)
+	assert.Equal(t, log.LevelError, LevelError)
+	assert.Equal(t, log.LevelWarn, LevelWarn)
+	assert.Equal(t, log.LevelInfo, LevelInfo)
+	assert.Equal(t, log.LevelDebug, LevelDebug)
 }
 
-func TestObsLoggerAdapter_WithAndWithGroup(t *testing.T) {
+// ── Loggers from elsewhere are accepted directly ─────────────────────────────
+
+// A lib-observability v4 logger satisfies libsd.Logger with no adapter. This is
+// the property that lets the fleet move majors independently of this library.
+func TestLibObservabilityLoggerSatisfiesContract(t *testing.T) {
 	t.Parallel()
 
-	rec := &recordingLogger{}
-
-	l := toObsLogger(rec).
-		With(log.String("base", "b")).
-		WithGroup("grp")
-	l.Log(context.Background(), log.LevelWarn, "m", log.String("k", "v"))
-
-	// Accumulated With attrs come first; grouped keys are dotted.
-	assert.Equal(t, []any{"base", "b", "grp.k", "v"}, rec.args)
-	assert.True(t, l.Enabled(log.LevelDebug))
-	assert.NoError(t, l.Sync(context.Background()))
-}
-
-// A typed-nil *slog.Logger stored in the Logger interface is not caught by a
-// plain == nil check; without a kind-aware guard the adapter wraps it and the
-// first log call panics inside slog. Both entry points must treat it as nil.
-func TestToObsLogger_TypedNilYieldsNop(t *testing.T) {
-	t.Parallel()
-
-	var sl *slog.Logger
-
-	l := toObsLogger(sl)
+	var l Logger = log.NewNop()
 	require.NotNil(t, l)
 
 	assert.NotPanics(t, func() {
-		l.Log(context.Background(), log.LevelInfo, "probe")
+		l.Log(context.Background(), LevelInfo, "accepted directly")
 	})
 }
+
+// ── Wiring ───────────────────────────────────────────────────────────────────
 
 func TestWithLogger_TypedNilKeepsConfiguredLogger(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingLogger{}
-	m := &Manager{logger: toObsLogger(rec)}
+	m := &Manager{logger: rec}
 
-	var sl *slog.Logger
-	WithLogger(sl)(m)
+	var typedNil *recordingLogger
 
-	m.logger.Log(context.Background(), log.LevelInfo, "still recording")
+	WithLogger(typedNil)(m)
+
+	m.logger.Log(context.Background(), LevelInfo, "still recording")
 	assert.Equal(t, "still recording", rec.msg, "typed-nil WithLogger must not replace the configured logger")
+}
+
+func TestNew_NoLoggerConfiguredIsSilentAndSafe(t *testing.T) {
+	t.Parallel()
+
+	m, err := New(Config{Enabled: false})
+	require.NoError(t, err)
+	require.NotNil(t, m.logger)
+
+	// Every internal call site logs unconditionally; with no logger configured
+	// that must be silent rather than a nil dereference.
+	assert.NotPanics(t, func() {
+		m.logger.Log(context.Background(), LevelWarn, "no logger configured", log.Err(assert.AnError))
+	})
+}
+
+func TestNew_ConfigLoggerReceivesLibraryOutput(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingLogger{}
+
+	m, err := New(Config{Enabled: false, Logger: rec})
+	require.NoError(t, err)
+	assert.Same(t, rec, m.logger, "the configured logger must be held as-is, with no adapter")
+
+	m.logger.Log(context.Background(), LevelWarn, "hello", log.String("service", "svc-a"))
+	assert.Equal(t, LevelWarn, rec.level)
+	assert.Equal(t, "hello", rec.msg)
+	assert.Len(t, rec.fields, 1)
 }

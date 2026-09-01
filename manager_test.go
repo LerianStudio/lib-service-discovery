@@ -27,10 +27,11 @@ func (c *captureLogger) record(msg string) {
 	c.msgs = append(c.msgs, msg)
 }
 
-func (c *captureLogger) InfoContext(_ context.Context, msg string, _ ...any)  { c.record(msg) }
-func (c *captureLogger) WarnContext(_ context.Context, msg string, _ ...any)  { c.record(msg) }
-func (c *captureLogger) ErrorContext(_ context.Context, msg string, _ ...any) { c.record(msg) }
-func (c *captureLogger) DebugContext(_ context.Context, msg string, _ ...any) { c.record(msg) }
+func (c *captureLogger) Log(_ context.Context, _ int, msg string, _ ...any) { c.record(msg) }
+
+func (c *captureLogger) Enabled(int) bool { return true }
+
+func (c *captureLogger) Sync(context.Context) error { return nil }
 
 func (c *captureLogger) has(msg string) bool {
 	c.mu.Lock()
@@ -80,7 +81,7 @@ func enabledManager(t *testing.T, reg Registry) *Manager {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	}, WithRegistry(reg))
 	require.NoError(t, err)
 
@@ -111,7 +112,7 @@ func TestNew_EnabledConsumerOnlySucceeds(t *testing.T) {
 	m, err := New(Config{
 		Enabled:    true,
 		ConsulAddr: "localhost:8500",
-		Logger:     nopLogger(),
+		Logger:     discardLogger(),
 	}, WithRegistry(stub))
 	require.NoError(t, err)
 	require.NotNil(t, m)
@@ -135,7 +136,7 @@ func TestRegister_NoEndpointErrors(t *testing.T) {
 	m, err := New(Config{
 		Enabled:    true,
 		ConsulAddr: "localhost:8500",
-		Logger:     nopLogger(),
+		Logger:     discardLogger(),
 	}, WithRegistry(&captureRegistry{onRegister: func(Service) { registered = true }}))
 	require.NoError(t, err)
 
@@ -155,7 +156,7 @@ func TestRegister_WithServicePortStillNeedsAdvertise(t *testing.T) {
 	m, err := New(Config{
 		Enabled:    true,
 		ConsulAddr: "localhost:8500",
-		Logger:     nopLogger(),
+		Logger:     discardLogger(),
 	}, WithRegistry(&captureRegistry{}))
 	require.NoError(t, err)
 
@@ -184,7 +185,7 @@ func TestNew_WithRegistryOption(t *testing.T) {
 		Enabled:       true,
 		ConsulAddr:    "localhost:8500",
 		AdvertiseAddr: "127.0.0.1",
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	}, WithRegistry(stub))
 	require.NoError(t, err)
 	assert.Equal(t, stub, m.registry)
@@ -201,15 +202,13 @@ func TestNew_WithRegistryNilIsIgnored(t *testing.T) {
 func TestNew_WithLoggerOption(t *testing.T) {
 	t.Parallel()
 
-	nop := nopLogger()
+	nop := discardLogger()
 
 	m, err := New(Config{Enabled: false}, WithLogger(nop))
 	require.NoError(t, err)
-	// m.logger is the internal lib-observability adapter that bridges the
-	// public libsd.Logger; assert it wraps exactly the logger we passed.
-	adapter, ok := m.logger.(*obsLoggerAdapter)
-	require.True(t, ok)
-	assert.Equal(t, nop, adapter.l)
+	// The consumer's logger is held directly: no adapter, so no
+	// lib-observability type sits between the caller and its own logger.
+	assert.Equal(t, nop, m.logger)
 }
 
 func TestNew_NilOptionIsIgnored(t *testing.T) {
@@ -956,7 +955,7 @@ func TestResolvePreferredEndpoint(t *testing.T) {
 				ConsulAddr:    "localhost:8500",
 				AdvertiseAddr: "127.0.0.1",
 				PreferView:    tt.preferView,
-				Logger:        nopLogger(),
+				Logger:        discardLogger(),
 			}, WithRegistry(&stubRegistry{resolveResult: tt.resolveRes}))
 			require.NoError(t, err)
 
@@ -988,7 +987,7 @@ func internalOnlyManager(t *testing.T, onRegister func(Service)) *Manager {
 		AdvertiseInternalAddr:   "svc.ns.svc.cluster.local",
 		AdvertiseInternalPort:   9090,
 		AdvertiseInternalScheme: "http",
-		Logger:                  nopLogger(),
+		Logger:                  discardLogger(),
 	}, WithRegistry(&captureRegistry{onRegister: onRegister}))
 	require.NoError(t, err)
 
@@ -1218,7 +1217,7 @@ func TestResolvePreferredURL(t *testing.T) {
 			ConsulAddr:    "localhost:8500",
 			AdvertiseAddr: "127.0.0.1",
 			PreferView:    view,
-			Logger:        nopLogger(),
+			Logger:        discardLogger(),
 		}, WithRegistry(&stubRegistry{resolveResult: intSvc}))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = m.Close() })

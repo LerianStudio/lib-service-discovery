@@ -8,9 +8,13 @@ This file provides repository-specific guidance for coding agents working on `li
   mandatory for the v2 major line; self-imports inside the module must carry it too)
 - Language: Go
 - Go version: `1.26` (see `go.mod`)
-- Lerian library dependency: `github.com/LerianStudio/lib-observability/v2` (internal only — the
-  private logger adapter in `logger.go` and `runtime.SafeGo`). There is **no** lib-commons
-  dependency and **no** replace directive; do not add either without a reason.
+- Lerian library dependency: `github.com/LerianStudio/lib-observability/v4` (internal only — the
+  `log.Field` constructors at call sites and `runtime.SafeGo`). It must never appear on the
+  public API: the logger contract is `obs.Logger`, declared in `obs/` over stdlib types only,
+  and `obs/boundary` fails the build if a lib-observability type reaches an exported field,
+  parameter, return or alias. There is **no** lib-commons dependency. There is currently ONE
+  replace directive, for the unpublished lib-observability v4 (PR #61); it must be removed
+  before tagging. Do not add another without a reason.
 
 ## Primary objective for changes
 
@@ -43,9 +47,11 @@ All standards mirror `lib-commons/v6`:
 3. **`manager.go`** declares `Manager`, `Option`, `New()`, and all exported methods.
 4. **Nil-receiver guards** — every exported method checks `if m == nil { return ErrNilManager }`.
 5. **Functional options** — `type Option func(*Manager)`; guard nil receiver and nil value inside each option.
-6. **Structured logging** — internally, use `log.Logger` from `lib-observability/v2/log` (lib-commons
-   has held no `log` package since v5); never `fmt.Sprintf` inside a log call;
-   use `log.String`, `log.Err`, `log.Int`, `log.Bool`.
+6. **Structured logging** — internal fields are typed `libsd.Logger` (alias of `obs.Logger`,
+   stdlib types only). Field constructors come from `lib-observability/v4/log`, which is an
+   INTERNAL dependency: never name a `lib-observability` type on an exported field, parameter,
+   return or alias — `obs/boundary` fails the build if you do. Never `fmt.Sprintf` inside a log
+   call; use `log.String`, `log.Err`, `log.Int`, `log.Bool`.
 7. **Sentinel errors** — defined in `types.go`; callers use `errors.Is()`.
 8. **Context first** — all blocking methods take `ctx context.Context` as first parameter.
 

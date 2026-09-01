@@ -29,7 +29,7 @@ func integrationManager(t *testing.T) *Manager {
 		Enabled:       true,
 		ConsulAddr:    consulAddr,
 		AdvertiseAddr: advertiseAddr,
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	})
 	require.NoError(t, err)
 
@@ -268,7 +268,7 @@ func TestIntegration_ResolveHonorsDialTimeout(t *testing.T) {
 		ConsulAddr:    "10.255.255.1:8500", // blackhole: SYNs are dropped, dial hangs until deadline
 		AdvertiseAddr: advertiseAddr,
 		DialTimeout:   dialTimeout,
-		Logger:        nopLogger(),
+		Logger:        discardLogger(),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = m.Close() })

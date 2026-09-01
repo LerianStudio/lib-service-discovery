@@ -6,8 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/LerianStudio/lib-observability/v2/log"
-	obsruntime "github.com/LerianStudio/lib-observability/v2/runtime"
+	"github.com/LerianStudio/lib-observability/v4/log"
+	obsruntime "github.com/LerianStudio/lib-observability/v4/runtime"
 )
 
 // managedResolver is the per-name watch-and-cache state that backs the one-shot
