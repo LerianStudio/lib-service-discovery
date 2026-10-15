@@ -9,7 +9,7 @@
 
 - name: core
   color: "1d76db"
-  description: Public API — Manager, Registry, domain types, config
+  description: Public API — Manager, Registry, resolvers, domain types, config
 
 - name: config
   color: "0e8a16"
@@ -22,6 +22,10 @@
 - name: ci
   color: "fbca04"
   description: CI pipelines and automation configs
+
+- name: scripts
+  color: "c5def5"
+  description: Build and developer scripts, git hooks
 
 - name: deps
   color: "0366d6"
@@ -38,6 +42,80 @@
 - name: tests
   color: "c2e0c6"
   description: Unit and integration tests
+
+# ── Change types ──────────────────────────────────────────────────────────────
+
+- name: bug
+  color: "d73a4a"
+  description: Something isn't working
+
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or request
+
+- name: dependencies
+  color: "0366d6"
+  description: Dependency updates
+
+- name: github-actions
+  color: "000000"
+  description: GitHub Actions updates
+
+- name: breaking-change
+  color: "b60205"
+  description: Introduces a breaking change to the public API
+
+- name: skip-changelog
+  color: "ededed"
+  description: Excluded from the changelog
+
+# ── Size ──────────────────────────────────────────────────────────────────────
+
+- name: size/XS
+  color: "3cbf00"
+  description: Extra small change
+
+- name: size/S
+  color: "5d9801"
+  description: Small change
+
+- name: size/M
+  color: "7f7203"
+  description: Medium change
+
+- name: size/L
+  color: "a14c05"
+  description: Large change
+
+- name: size/XL
+  color: "c32607"
+  description: Extra large change
+
+# ── Triage / stale ────────────────────────────────────────────────────────────
+
+- name: triage
+  color: "fbca04"
+  description: Needs triage
+
+- name: stale
+  color: "cccccc"
+  description: No recent activity
+
+- name: no-stale
+  color: "ffffff"
+  description: Exempt from stale automation
+
+- name: work-in-progress
+  color: "f9d0c4"
+  description: Not ready for review
+
+- name: pinned
+  color: "5319e7"
+  description: Pinned, exempt from stale automation
+
+- name: review-ready
+  color: "0e8a16"
+  description: CI passed and a CodeRabbit review was requested
 
 # ── Automation ────────────────────────────────────────────────────────────────
 
