@@ -20,6 +20,22 @@ updates:
         patterns:
           - "*"
 
+  # Demo service base images
+  - package-ecosystem: "docker"
+    directory: "/services"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "America/Sao_Paulo"
+    target-branch: "develop"
+    labels:
+      - "deps"
+      - "demo"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # Pinned third-party GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -36,9 +52,6 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
-    ignore:
-      # LerianStudio internal actions are pinned intentionally
-      - dependency-name: "LerianStudio/*"
     groups:
       actions-core:
         patterns:

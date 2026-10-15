@@ -7,12 +7,14 @@ consul:
   - changed-files:
       - any-glob-to-any-file: 'consul.go'
 
-# Public API: Manager, Registry, dynamic resolver, domain types, config
+# Public API: Manager, Registry, resolvers, logger adapter, domain types, config
 core:
   - changed-files:
       - any-glob-to-any-file:
           - 'manager.go'
           - 'resolver.go'
+          - 'managed_resolver.go'
+          - 'logger.go'
           - 'types.go'
           - 'config.go'
           - 'doc.go'
@@ -23,6 +25,7 @@ demo:
       - any-glob-to-any-file:
           - 'services/**/*'
           - 'docker-compose.yml'
+          - '.env.example'
 
 # Application and tooling configuration
 config:
@@ -35,6 +38,8 @@ config:
           - '.goreleaser.yml'
           - '.goreleaser.yaml'
           - '.ignorecoverunit'
+          - '.coderabbit.yml'
+          - '.coderabbit.yaml'
 
 # Continuous integration pipelines and automation configs
 ci:
@@ -44,6 +49,17 @@ ci:
           - '.github/labeler.yml'
           - '.github/labels.yml'
           - '.github/dependabot.yml'
+          - '.github/CODEOWNERS'
+          - '.github/pull_request_template.md'
+
+# Build and developer scripts, git hooks
+scripts:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'scripts/**/*'
+          - '.githooks/**/*'
+          - 'Makefile'
+          - 'make.sh'
 
 # Markdown docs and context files
 docs:

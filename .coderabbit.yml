@@ -1,0 +1,8 @@
+reviews:
+  review_status: true
+  high_level_summary: false
+  high_level_summary_in_walkthrough: false
+  auto_review:
+    enabled: false
+    base_branches:
+      - "develop"
